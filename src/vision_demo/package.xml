@@ -1,16 +1,41 @@
 <?xml version="1.0"?>
-<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+
+<?xml-model
+  href="http://download.ros.org/schema/package_format3.xsd"
+  schematypens="http://www.w3.org/2001/XMLSchema"?>
+
 <package format="3">
+
   <name>vision_demo</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="lyt@todo.todo">lyt</maintainer>
-  <license>TODO: License declaration</license>
+
+  <version>0.1.0</version>
+
+  <description>
+    ROS 2 active vision and gimbal control demo
+    supporting USB camera or ESP32-CAM Wi-Fi.
+  </description>
+
+  <maintainer email="lyt@todo.todo">
+    lyt
+  </maintainer>
+
+  <license>
+    TODO: License declaration
+  </license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
-  <depend>cv_bridge</depend>
   <depend>geometry_msgs</depend>
+  <depend>cv_bridge</depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-serial</exec_depend>
+  <exec_depend>python3-websocket</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
@@ -20,4 +45,5 @@
   <export>
     <build_type>ament_python</build_type>
   </export>
+
 </package>

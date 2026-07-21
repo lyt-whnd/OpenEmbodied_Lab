@@ -1,0 +1,35 @@
+esp32_camera_node:
+  ros__parameters:
+    stream_url: "http://192.168.1.100:81/stream"
+    image_topic: "/image_raw"
+    frame_id: "esp32_camera"
+    reconnect_delay_sec: 2.0
+    opencv_buffer_size: 1
+
+color_tracker_node:
+  ros__parameters:
+    image_topic: "/image_raw"
+
+gimbal_pd_websocket_node:
+  ros__parameters:
+    target_topic: "/target_position"
+
+    websocket_url: "ws://192.168.1.100/ws"
+
+    control_hz: 10.0
+
+    kp_x: 0.015
+    kd_x: 0.006
+
+    kp_y: 0.015
+    kd_y: 0.006
+
+    dead_zone_x: 30.0
+    dead_zone_y: 30.0
+
+    max_step: 3
+    target_lost_area: 1.0
+
+    target_timeout_sec: 0.5
+    command_refresh_sec: 0.5
+    reconnect_delay_sec: 2.0

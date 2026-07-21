@@ -1,0 +1,93 @@
+#pragma once
+
+#include <Arduino.h>
+
+
+namespace AppConfig
+{
+
+    /*
+    * 调试串口波特率。
+    */
+    static constexpr uint32_t DEBUG_BAUD = 115200;
+
+    /*
+    * Wi-Fi 最长连接等待时间。
+    */
+    static constexpr uint32_t WIFI_TIMEOUT_MS = 30000;
+
+    /*
+    * HTTP 服务端口。
+    */
+    static constexpr uint16_t HTTP_PORT = 80;
+    static constexpr uint16_t STREAM_PORT = 81;
+
+
+    /*
+ * ESP32-CAM 与 STM32 的串口配置。
+ *
+ * GPIO13：ESP32 RX，连接 STM32 TX
+ * GPIO14：ESP32 TX，连接 STM32 RX
+ *
+ * 使用这两个引脚后，不再使用板载 MicroSD。
+ */
+    namespace Stm32Uart
+    {
+        static constexpr uint32_t BAUD_RATE = 115200;
+
+        static constexpr int RX_PIN = 13;
+        static constexpr int TX_PIN = 14;
+
+        /*
+        * STM32 返回信息的最大单行长度。
+        */
+        static constexpr size_t RX_LINE_MAX_LENGTH = 128;
+    }
+
+
+    /*
+    * WebSocket 控制接口参数。
+    */
+    namespace WebSocket
+    {
+        /*
+        * Linux 单次发送命令的最大长度。
+        */
+        static constexpr size_t MAX_COMMAND_LENGTH = 64;
+
+        /*
+        * 限制单次云台移动步长，避免错误网络数据
+        * 导致云台突然大幅度动作。
+        */
+        static constexpr int MIN_MOVE_STEP = -10;
+        static constexpr int MAX_MOVE_STEP = 10;
+    }
+
+
+    /*
+    * AI Thinker ESP32-CAM 摄像头引脚。
+    */
+    namespace CameraPins
+    {
+        static constexpr int PWDN  = 32;
+        static constexpr int RESET = -1;
+
+        static constexpr int XCLK = 0;
+        static constexpr int SIOD = 26;
+        static constexpr int SIOC = 27;
+
+        static constexpr int D7 = 35;
+        static constexpr int D6 = 34;
+        static constexpr int D5 = 39;
+        static constexpr int D4 = 36;
+        static constexpr int D3 = 21;
+        static constexpr int D2 = 19;
+        static constexpr int D1 = 18;
+        static constexpr int D0 = 5;
+
+        static constexpr int VSYNC = 25;
+        static constexpr int HREF  = 23;
+        static constexpr int PCLK  = 22;
+    }
+
+}
