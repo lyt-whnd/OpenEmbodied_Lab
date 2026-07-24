@@ -84,6 +84,38 @@ ws://<ESP32_IP>/ws
 Linux sends one complete V1 application message in each binary WebSocket
 frame. Video remains on the independent HTTP MJPEG connection.
 
+### Wi-Fi provisioning
+
+Wi-Fi credentials are not compiled into the firmware. The ESP32 stores up to
+five SSID/password profiles in NVS and uses the following boot flow:
+
+```text
+load saved profiles from NVS
+        ↓
+scan and try visible saved networks for up to 30 seconds
+        ↓ connected
+start HTTP, MJPEG, and WebSocket services
+
+        ↓ no saved network connected
+start temporary SoftAP and captive configuration page
+        ↓
+save the submitted profile to NVS and restart
+```
+
+The provisioning access point is named
+`Robot_Config_<chip-id>` and uses password `robot-config`. Connect a phone or
+computer to that 2.4 GHz access point and open:
+
+```text
+http://192.168.4.1/
+```
+
+Select a scanned network or type an SSID, enter its password, and choose
+**Save and restart**. An existing SSID is updated in place. Empty slots are
+used first; after five profiles are stored, new networks replace old slots in
+round-robin order. `wifiServiceClearProfiles()` is reserved for a future
+protocol command that resets Wi-Fi provisioning.
+
 ### V1 application message
 
 The transport-independent header is exactly 10 bytes:
@@ -202,6 +234,9 @@ used by this ESP32 firmware.
 - ESP32 V1 destination router
 - ESP32-to-STM32 COBS and CRC16 framing
 - STM32-to-Linux validated binary forwarding
+- NVS storage for five Wi-Fi profiles
+- 30-second automatic Wi-Fi selection
+- SoftAP captive Wi-Fi provisioning page
 - PWM servo control
 
 ### In Progress
@@ -978,6 +1013,8 @@ Then log out and log back in.
 - [x] ESP32 V1 message router
 - [x] ESP32-to-STM32 COBS and CRC16 framing
 - [x] STM32-to-Linux validated V1 forwarding
+- [x] NVS multi-network Wi-Fi provisioning
+- [x] SoftAP fallback configuration page
 
 ### In Progress
 

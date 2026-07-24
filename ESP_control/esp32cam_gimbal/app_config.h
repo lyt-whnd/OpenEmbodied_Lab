@@ -12,9 +12,31 @@ namespace AppConfig
     static constexpr uint32_t DEBUG_BAUD = 115200;
 
     /*
-    * Wi-Fi 最长连接等待时间。
-    */
-    static constexpr uint32_t WIFI_TIMEOUT_MS = 30000;
+     * Wi-Fi 自动连接与 SoftAP 配网参数。
+     */
+    namespace WiFiProvisioning
+    {
+        static constexpr size_t MAX_SAVED_NETWORKS = 5;
+
+        /*
+         * 启动后最多用 30 秒扫描并尝试 NVS 中保存的网络。
+         */
+        static constexpr uint32_t TOTAL_CONNECT_TIMEOUT_MS = 30000;
+        static constexpr uint32_t PER_NETWORK_TIMEOUT_MS = 6000;
+        static constexpr uint32_t SCAN_RETRY_DELAY_MS = 1000;
+
+        /*
+         * 临时配网热点名称会追加芯片 ID 后六位，
+         * 例如 Robot_Config_A1B2C3。
+         */
+        static constexpr const char *AP_SSID_PREFIX =
+            "Robot_Config_";
+        static constexpr const char *AP_PASSWORD =
+            "robot-config";
+
+        static constexpr uint16_t DNS_PORT = 53;
+        static constexpr uint16_t WEB_PORT = 80;
+    }
 
     /*
     * HTTP 服务端口。
