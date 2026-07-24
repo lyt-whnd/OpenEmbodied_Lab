@@ -12,6 +12,7 @@ from vision_demo.protocol_v1 import (
     ProtocolError,
     SequenceGenerator,
     ServiceId,
+    SystemOpcode,
 )
 
 
@@ -72,6 +73,22 @@ def test_motion_payload_round_trip():
     )
 
     assert MotionMovePayload.decode(original.encode()) == original
+
+
+def test_system_pong_vector_matches_esp32():
+    """The ESP32 PONG response vector must be stable across languages."""
+    message = ApplicationMessage(
+        flags=int(MessageFlag.RESPONSE),
+        src=int(NodeId.ESP32),
+        dst=int(NodeId.LINUX),
+        service=int(ServiceId.SYSTEM),
+        opcode=int(SystemOpcode.PONG),
+        seq=0x1234,
+    )
+
+    assert message.encode().hex() == (
+        '01020201010234120000'
+    )
 
 
 def test_decode_rejects_length_mismatch():

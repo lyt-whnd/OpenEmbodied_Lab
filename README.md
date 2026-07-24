@@ -115,6 +115,13 @@ The Linux implementation is:
 src/vision_demo/vision_demo/protocol_v1.py
 ```
 
+The matching ESP32 implementation is:
+
+```text
+ESP_control/esp32cam_gimbal/protocol_v1.h
+ESP_control/esp32cam_gimbal/protocol_v1.cpp
+```
+
 `MOTION/MOVE` currently uses a fixed 12-byte little-endian payload:
 
 | Field | Type | Unit |
@@ -132,9 +139,46 @@ pending command is retained. `STOP` uses the ACK-required flag.
 This stage implements the Linux transmit path; ACK reception, timeout, and
 retry handling will be added with the bidirectional WebSocket link manager.
 
-The ESP32 V1 decoder/router and UART COBS/CRC framing are the next transport
-stage. Until the ESP32 binary decoder is added, the new Linux sender will not
-interoperate with firmware that accepts only legacy `#MOVE` text frames.
+The ESP32 validates the V1 version, known flags, payload limit, exact frame
+length, source node, and destination node before routing a message. Messages
+addressed to STM32 are forwarded without changing their application header.
+Messages addressed to ESP32 currently support:
+
+```text
+SYSTEM/PING  opcode 0x01
+SYSTEM/PONG  opcode 0x02
+```
+
+`PONG` keeps the request sequence number and sets the response flag.
+
+### ESP32-to-STM32 UART framing
+
+WebSocket already preserves message boundaries, while UART is a byte stream.
+The ESP32 therefore sends the same V1 application message using:
+
+```text
+COBS(application_message + CRC16-CCITT-FALSE) + 0x00
+```
+
+CRC parameters:
+
+```text
+polynomial: 0x1021
+initial:    0xFFFF
+refin:      false
+refout:     false
+xorout:     0x0000
+```
+
+The CRC is appended little-endian and covers the complete V1 application
+message. The ESP32 UART receiver performs delimiter recovery, COBS decoding,
+CRC checking, V1 validation, and source/destination checking. Valid STM32
+messages addressed to Linux are returned as binary WebSocket frames. Only
+one active Linux WebSocket client is retained by the current firmware.
+
+STM32 must implement the same COBS/CRC framing before the new binary control
+path can operate end to end; the former newline text UART format is no longer
+used by this ESP32 firmware.
 
 ---
 
@@ -154,15 +198,17 @@ interoperate with firmware that accepts only legacy `#MOVE` text frames.
 - PD gimbal controller
 - Linux V1 application protocol codec
 - Binary WebSocket motion sender
-- STM32 UART command protocol
+- ESP32 V1 binary WebSocket decoder
+- ESP32 V1 destination router
+- ESP32-to-STM32 COBS and CRC16 framing
+- STM32-to-Linux validated binary forwarding
 - PWM servo control
 
 ### In Progress
 
-- ESP32 WebSocket command server
-- ESP32-to-STM32 UART bridge
-- ESP32 V1 binary decoder and message router
-- UART COBS framing and CRC16
+- STM32 V1 application protocol decoder
+- STM32 COBS and CRC16 UART receiver
+- Linux ACK reception, timeout, and retry handling
 - YOLO target detection
 - RK3568 deployment
 - Low-latency frame processing
@@ -225,6 +271,16 @@ OpenEmbodied_Lab/
 │       │   └── test_protocol_v1.py
 │       ├── package.xml
 │       └── setup.py
+├── ESP_control/
+│   ├── esp32cam_gimbal/
+│   │   ├── protocol_v1.h
+│   │   ├── protocol_v1.cpp
+│   │   ├── uart_framing.h
+│   │   ├── uart_framing.cpp
+│   │   ├── websocket_service.cpp
+│   │   └── stm32_uart.cpp
+│   └── tests/
+│       └── protocol_v1_host_test.cpp
 ├── README.md
 └── .gitignore
 ```
@@ -431,6 +487,30 @@ Therefore, select:
 ```
 
 The ESP32-CAM requires a 2.4 GHz Wi-Fi network.
+
+### ESP32 protocol host test
+
+The transport-independent V1 codec, COBS, and CRC16 code can be checked on
+Linux without Arduino hardware:
+
+```bash
+g++ \
+  -std=c++17 \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -I ESP_control/esp32cam_gimbal \
+  ESP_control/tests/protocol_v1_host_test.cpp \
+  ESP_control/esp32cam_gimbal/protocol_v1.cpp \
+  ESP_control/esp32cam_gimbal/uart_framing.cpp \
+  -o /tmp/protocol_v1_host_test
+
+/tmp/protocol_v1_host_test
+```
+
+The test covers the shared Linux/ESP32 fixed byte vector, PONG encoding,
+CRC16 reference vector, COBS round trips, corrupted frames, and the maximum
+V1 payload size.
 
 ---
 
@@ -701,10 +781,10 @@ seq     = wrapping uint16
 ```
 
 The `websocket-client` call uses a binary WebSocket frame; it does not send
-the former `#MOVE` strings. The ESP32 must decode the 10-byte application
-header before routing the message to STM32. If the ESP32 V1 WebSocket decoder
-has not yet been implemented, the node can connect but its binary frames will
-not be executed. The image receiver remains independent.
+the former `#MOVE` strings. The ESP32 decodes the 10-byte application header
+and routes STM32 messages through its COBS/CRC16 UART transport. The remaining
+end-to-end dependency is the matching STM32 V1 UART decoder. The image
+receiver remains independent.
 
 ---
 
@@ -894,14 +974,18 @@ Then log out and log back in.
 - [x] Linux V1 application protocol codec
 - [x] Linux binary WebSocket motion sender
 - [x] V1 protocol fixed-vector unit tests
+- [x] ESP32 V1 binary WebSocket decoder
+- [x] ESP32 V1 message router
+- [x] ESP32-to-STM32 COBS and CRC16 framing
+- [x] STM32-to-Linux validated V1 forwarding
 
 ### In Progress
 
 - [x] ESP32 legacy WebSocket server
 - [x] ESP32 legacy UART command forwarding
-- [ ] ESP32 V1 binary WebSocket decoder
-- [ ] ESP32 V1 message router
-- [ ] ESP32-to-STM32 COBS and CRC16 framing
+- [ ] STM32 V1 application decoder
+- [ ] STM32 COBS and CRC16 UART receiver
+- [ ] Linux ACK receive, timeout, and retry
 - [ ] Complete Wi-Fi gimbal control loop
 - [ ] YOLO detection node
 - [ ] Latest-frame-only inference pipeline

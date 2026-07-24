@@ -3,6 +3,8 @@
 #include <Arduino.h>
 
 #include "app_config.h"
+#include "protocol_v1.h"
+#include "uart_framing.h"
 
 
 namespace
@@ -17,16 +19,115 @@ namespace
 HardwareSerial stm32Serial(1);
 
 bool uartInitialized = false;
+bool discardUntilDelimiter = false;
 
+Stm32UartMessageCallback messageCallback =
+    nullptr;
 
-/*
- * 接收 STM32 返回字符串的缓冲区。
- */
-char receiveLine[
-    AppConfig::Stm32Uart::RX_LINE_MAX_LENGTH
+uint8_t encodedReceiveBuffer[
+    UartFraming::MAX_COBS_FRAME_SIZE
 ];
 
-size_t receiveLength = 0;
+size_t encodedReceiveLength = 0;
+
+
+void processEncodedFrame()
+{
+    uint8_t message[
+        ProtocolV1::MAX_MESSAGE_SIZE
+    ] = {};
+
+    size_t messageLength = 0;
+
+    const UartFraming::DecodeStatus frameStatus =
+        UartFraming::decodeApplicationFrame(
+            encodedReceiveBuffer,
+            encodedReceiveLength,
+            message,
+            sizeof(message),
+            messageLength
+        );
+
+    if (frameStatus != UartFraming::DecodeStatus::OK)
+    {
+        Serial.printf(
+            "STM32 RX frame rejected: %s\n",
+            UartFraming::decodeStatusName(
+                frameStatus
+            )
+        );
+
+        return;
+    }
+
+    ProtocolV1::MessageView view = {};
+
+    const ProtocolV1::DecodeStatus messageStatus =
+        ProtocolV1::decodeMessage(
+            message,
+            messageLength,
+            view
+        );
+
+    if (
+        messageStatus !=
+        ProtocolV1::DecodeStatus::OK
+    )
+    {
+        Serial.printf(
+            "STM32 RX V1 message rejected: %s\n",
+            ProtocolV1::decodeStatusName(
+                messageStatus
+            )
+        );
+
+        return;
+    }
+
+    if (view.src != ProtocolV1::NODE_STM32)
+    {
+        Serial.printf(
+            "STM32 RX rejected: invalid src=0x%02X\n",
+            static_cast<unsigned int>(view.src)
+        );
+
+        return;
+    }
+
+    if (
+        view.dst != ProtocolV1::NODE_LINUX &&
+        view.dst != ProtocolV1::NODE_ESP32 &&
+        view.dst != ProtocolV1::NODE_BROADCAST
+    )
+    {
+        Serial.printf(
+            "STM32 RX rejected: invalid dst=0x%02X\n",
+            static_cast<unsigned int>(view.dst)
+        );
+
+        return;
+    }
+
+    Serial.printf(
+        "STM32 RX V1: seq=%u, "
+        "service=0x%02X, opcode=0x%02X, "
+        "payload=%u\n",
+        static_cast<unsigned int>(view.seq),
+        static_cast<unsigned int>(view.service),
+        static_cast<unsigned int>(view.opcode),
+        static_cast<unsigned int>(
+            view.payloadLength
+        )
+    );
+
+    if (messageCallback != nullptr)
+    {
+        messageCallback(
+            message,
+            messageLength
+        );
+    }
+}
 
 }
 
@@ -40,11 +141,12 @@ bool stm32UartInit()
         AppConfig::Stm32Uart::TX_PIN
     );
 
-    receiveLength = 0;
+    encodedReceiveLength = 0;
+    discardUntilDelimiter = false;
     uartInitialized = true;
 
     Serial.println();
-    Serial.println("STM32 UART initialized");
+    Serial.println("STM32 V1 UART initialized");
 
     Serial.printf(
         "STM32 UART: baud=%u, RX=%d, TX=%d\n",
@@ -59,8 +161,17 @@ bool stm32UartInit()
 }
 
 
-bool stm32UartSendCommand(
-    const char *command
+void stm32UartSetMessageCallback(
+    Stm32UartMessageCallback callback
+)
+{
+    messageCallback = callback;
+}
+
+
+bool stm32UartSendApplicationMessage(
+    const uint8_t *message,
+    size_t length
 )
 {
     if (!uartInitialized)
@@ -72,34 +183,77 @@ bool stm32UartSendCommand(
         return false;
     }
 
-    if (
-        command == nullptr ||
-        command[0] == '\0'
-    )
+    ProtocolV1::MessageView view = {};
+
+    const ProtocolV1::DecodeStatus status =
+        ProtocolV1::decodeMessage(
+            message,
+            length,
+            view
+        );
+
+    if (status != ProtocolV1::DecodeStatus::OK)
     {
-        Serial.println(
-            "Cannot send empty STM32 command"
+        Serial.printf(
+            "STM32 TX rejected invalid V1 message: %s\n",
+            ProtocolV1::decodeStatusName(status)
         );
 
         return false;
     }
 
-    /*
-     * 先发送命令内容。
-     */
-    stm32Serial.print(command);
+    uint8_t wireFrame[
+        UartFraming::MAX_WIRE_FRAME_SIZE
+    ] = {};
 
-    /*
-     * UART 是字节流，没有 WebSocket 的消息边界。
-     *
-     * 所以使用换行符告诉 STM32：
-     * 一条命令到这里结束。
-     */
-    stm32Serial.write('\n');
+    size_t wireLength = 0;
+
+    if (
+        !UartFraming::encodeApplicationFrame(
+            message,
+            length,
+            wireFrame,
+            sizeof(wireFrame),
+            wireLength
+        )
+    )
+    {
+        Serial.println(
+            "STM32 TX frame encoding failed"
+        );
+
+        return false;
+    }
+
+    const size_t bytesWritten =
+        stm32Serial.write(
+            wireFrame,
+            wireLength
+        );
+
+    if (bytesWritten != wireLength)
+    {
+        Serial.printf(
+            "STM32 TX incomplete: %u/%u bytes\n",
+            static_cast<unsigned int>(
+                bytesWritten
+            ),
+            static_cast<unsigned int>(
+                wireLength
+            )
+        );
+
+        return false;
+    }
 
     Serial.printf(
-        "STM32 TX: %s\n",
-        command
+        "STM32 TX V1: seq=%u, "
+        "service=0x%02X, opcode=0x%02X, "
+        "wire=%u bytes\n",
+        static_cast<unsigned int>(view.seq),
+        static_cast<unsigned int>(view.service),
+        static_cast<unsigned int>(view.opcode),
+        static_cast<unsigned int>(wireLength)
     );
 
     return true;
@@ -115,57 +269,52 @@ void stm32UartPoll()
 
     while (stm32Serial.available() > 0)
     {
-        const char value =
-            static_cast<char>(
+        const uint8_t value =
+            static_cast<uint8_t>(
                 stm32Serial.read()
             );
 
-        /*
-         * 忽略 \r，只使用 \n 作为行结束符。
-         */
-        if (value == '\r')
+        if (value == 0U)
         {
-            continue;
-        }
-
-        if (value == '\n')
-        {
-            if (receiveLength > 0)
+            if (discardUntilDelimiter)
             {
-                receiveLine[receiveLength] =
-                    '\0';
+                discardUntilDelimiter = false;
+                encodedReceiveLength = 0;
+                continue;
+            }
 
-                Serial.printf(
-                    "STM32 RX: %s\n",
-                    receiveLine
-                );
-
-                receiveLength = 0;
+            if (encodedReceiveLength > 0U)
+            {
+                processEncodedFrame();
+                encodedReceiveLength = 0;
             }
 
             continue;
         }
 
-        /*
-         * 留出一个位置存放字符串结束符 '\0'。
-         */
+        if (discardUntilDelimiter)
+        {
+            continue;
+        }
+
         if (
-            receiveLength + 1 <
-            sizeof(receiveLine)
+            encodedReceiveLength >=
+            sizeof(encodedReceiveBuffer)
         )
         {
-            receiveLine[receiveLength] =
-                value;
-
-            receiveLength++;
-        }
-        else
-        {
             Serial.println(
-                "STM32 RX line is too long, discarded"
+                "STM32 RX frame too long, discarded"
             );
 
-            receiveLength = 0;
+            encodedReceiveLength = 0;
+            discardUntilDelimiter = true;
+            continue;
         }
+
+        encodedReceiveBuffer[
+            encodedReceiveLength
+        ] = value;
+
+        encodedReceiveLength++;
     }
 }

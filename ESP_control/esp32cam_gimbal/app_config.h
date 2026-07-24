@@ -37,30 +37,6 @@ namespace AppConfig
 
         static constexpr int RX_PIN = 13;
         static constexpr int TX_PIN = 14;
-
-        /*
-        * STM32 返回信息的最大单行长度。
-        */
-        static constexpr size_t RX_LINE_MAX_LENGTH = 128;
-    }
-
-
-    /*
-    * WebSocket 控制接口参数。
-    */
-    namespace WebSocket
-    {
-        /*
-        * Linux 单次发送命令的最大长度。
-        */
-        static constexpr size_t MAX_COMMAND_LENGTH = 64;
-
-        /*
-        * 限制单次云台移动步长，避免错误网络数据
-        * 导致云台突然大幅度动作。
-        */
-        static constexpr int MIN_MOVE_STEP = -10;
-        static constexpr int MAX_MOVE_STEP = 10;
     }
 
 

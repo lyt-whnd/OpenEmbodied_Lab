@@ -1,5 +1,14 @@
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
+
+using Stm32UartMessageCallback = void (*)(
+    const uint8_t *message,
+    size_t length
+);
+
 
 /*
  * 初始化 ESP32-CAM 与 STM32 之间的硬件串口。
@@ -8,26 +17,27 @@ bool stm32UartInit();
 
 
 /*
- * 向 STM32 发送一条完整命令。
+ * 注册一个有效 STM32 V1 消息的接收回调。
  *
- * 函数会自动在命令末尾补上 '\n'。
- *
- * 例如传入：
- *
- * #MOVE,1,-1
- *
- * STM32 实际收到：
- *
- * #MOVE,1,-1\n
+ * message 指针只在回调执行期间有效。
  */
-bool stm32UartSendCommand(
-    const char *command
+void stm32UartSetMessageCallback(
+    Stm32UartMessageCallback callback
 );
 
 
 /*
- * 读取并打印 STM32 返回的信息。
- *
- * 当前主要用于观察 STM32 ACK 和调试输出。
+ * 使用 COBS + CRC16-CCITT-FALSE 封装并发送
+ * 一条完整的 V1 应用消息。
+ */
+bool stm32UartSendApplicationMessage(
+    const uint8_t *message,
+    size_t length
+);
+
+
+/*
+ * 非阻塞读取 UART 字节流，按 0x00 分帧，
+ * 完成 COBS、CRC16 和 V1 应用头校验。
  */
 void stm32UartPoll();

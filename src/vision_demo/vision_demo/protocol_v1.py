@@ -47,6 +47,13 @@ class ServiceId(IntEnum):
     OTA = 0x50
 
 
+class SystemOpcode(IntEnum):
+    """System service operation identifiers."""
+
+    PING = 0x01
+    PONG = 0x02
+
+
 class MotionOpcode(IntEnum):
     """Motion service operation identifiers."""
 

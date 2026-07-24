@@ -2,10 +2,9 @@
 
 #include <Arduino.h>
 
-#include <cstdio>
-#include <cstring>
+#include <string.h>
 
-#include "app_config.h"
+#include "protocol_v1.h"
 #include "stm32_uart.h"
 
 
@@ -32,188 +31,239 @@ bool websocketServiceRegister(
 namespace
 {
 
-/*
- * 判断一个字符是否应当从命令首尾删除。
- */
-bool isTrimCharacter(char value)
+httpd_handle_t websocketServer = nullptr;
+int websocketClientFd = -1;
+
+uint8_t websocketTxBuffer[
+    ProtocolV1::MAX_MESSAGE_SIZE
+];
+
+
+bool websocketClientIsReady()
 {
+    if (
+        websocketServer == nullptr ||
+        websocketClientFd < 0
+    )
+    {
+        return false;
+    }
+
     return (
-        value == ' '  ||
-        value == '\t' ||
-        value == '\r' ||
-        value == '\n'
+        httpd_ws_get_fd_info(
+            websocketServer,
+            websocketClientFd
+        ) ==
+        HTTPD_WS_CLIENT_WEBSOCKET
     );
 }
 
 
-/*
- * 原地删除字符串首尾的空格和换行。
- */
-void trimCommand(char *command)
+bool sendBinaryFrame(
+    httpd_req_t *request,
+    const uint8_t *data,
+    size_t length
+)
 {
-    if (command == nullptr)
-    {
-        return;
-    }
+    httpd_ws_frame_t response = {};
 
-    size_t length = strlen(command);
-    size_t start = 0;
+    response.type = HTTPD_WS_TYPE_BINARY;
+    response.payload =
+        const_cast<uint8_t *>(data);
+    response.len = length;
 
-    while (
-        start < length &&
-        isTrimCharacter(command[start])
+    return (
+        httpd_ws_send_frame(
+            request,
+            &response
+        ) == ESP_OK
+    );
+}
+
+
+bool handleLocalMessage(
+    httpd_req_t *request,
+    const ProtocolV1::MessageView &message
+)
+{
+    if (
+        message.service !=
+            ProtocolV1::SERVICE_SYSTEM ||
+        message.opcode !=
+            ProtocolV1::SYSTEM_PING
     )
     {
-        start++;
-    }
-
-    if (start > 0)
-    {
-        memmove(
-            command,
-            command + start,
-            length - start + 1
+        Serial.printf(
+            "ESP32 local V1 message unsupported: "
+            "service=0x%02X, opcode=0x%02X\n",
+            static_cast<unsigned int>(
+                message.service
+            ),
+            static_cast<unsigned int>(
+                message.opcode
+            )
         );
 
-        length -= start;
+        return false;
     }
 
-    while (
-        length > 0 &&
-        isTrimCharacter(
-            command[length - 1]
+    ProtocolV1::MessageView pong = {};
+
+    pong.version = ProtocolV1::VERSION;
+    pong.flags = ProtocolV1::FLAG_RESPONSE;
+    pong.src = ProtocolV1::NODE_ESP32;
+    pong.dst = ProtocolV1::NODE_LINUX;
+    pong.service = ProtocolV1::SERVICE_SYSTEM;
+    pong.opcode = ProtocolV1::SYSTEM_PONG;
+    pong.seq = message.seq;
+    pong.payloadLength = 0;
+    pong.payload = nullptr;
+
+    size_t responseLength = 0;
+
+    if (
+        !ProtocolV1::encodeMessage(
+            pong,
+            websocketTxBuffer,
+            sizeof(websocketTxBuffer),
+            responseLength
         )
     )
     {
-        command[length - 1] = '\0';
-        length--;
+        Serial.println(
+            "Cannot encode SYSTEM/PONG"
+        );
+
+        return false;
     }
-}
 
+    if (
+        !sendBinaryFrame(
+            request,
+            websocketTxBuffer,
+            responseLength
+        )
+    )
+    {
+        Serial.println(
+            "Cannot send SYSTEM/PONG"
+        );
 
-/*
- * 检查 #MOVE 命令是否合法。
- *
- * 合法示例：
- *
- * #MOVE,1,-2
- */
-bool validateMoveCommand(
-    const char *command
-)
-{
-    int yawStep = 0;
-    int pitchStep = 0;
+        return false;
+    }
 
-    /*
-     * extra 用来检查命令结尾是否还有多余字符。
-     *
-     * 正常命令只有两个整数，因此 sscanf
-     * 应当只成功转换两个字段。
-     */
-    char extra = '\0';
-
-    const int matched = sscanf(
-        command,
-        "#MOVE,%d,%d%c",
-        &yawStep,
-        &pitchStep,
-        &extra
+    Serial.printf(
+        "WebSocket TX V1: SYSTEM/PONG seq=%u\n",
+        static_cast<unsigned int>(
+            message.seq
+        )
     );
-
-    if (matched != 2)
-    {
-        return false;
-    }
-
-    if (
-        yawStep <
-            AppConfig::WebSocket::MIN_MOVE_STEP ||
-        yawStep >
-            AppConfig::WebSocket::MAX_MOVE_STEP
-    )
-    {
-        return false;
-    }
-
-    if (
-        pitchStep <
-            AppConfig::WebSocket::MIN_MOVE_STEP ||
-        pitchStep >
-            AppConfig::WebSocket::MAX_MOVE_STEP
-    )
-    {
-        return false;
-    }
 
     return true;
 }
 
 
-/*
- * 只允许转发已经定义好的 STM32 命令。
- *
- * 不允许网络客户端向 STM32 随意发送任意字符串。
- */
-bool validateCommand(
-    const char *command
+void forwardStm32MessageToLinux(
+    const uint8_t *messageData,
+    size_t length
 )
 {
-    if (
-        command == nullptr ||
-        command[0] == '\0'
-    )
-    {
-        return false;
-    }
+    ProtocolV1::MessageView message = {};
 
-    if (strcmp(command, "#STOP") == 0)
-    {
-        return true;
-    }
+    const ProtocolV1::DecodeStatus status =
+        ProtocolV1::decodeMessage(
+            messageData,
+            length,
+            message
+        );
 
-    if (strcmp(command, "#CENTER") == 0)
+    if (status != ProtocolV1::DecodeStatus::OK)
     {
-        return true;
-    }
+        Serial.printf(
+            "STM32 to WebSocket rejected: %s\n",
+            ProtocolV1::decodeStatusName(status)
+        );
 
-    if (strcmp(command, "#GET") == 0)
-    {
-        return true;
+        return;
     }
 
     if (
-        strncmp(
-            command,
-            "#MOVE,",
-            strlen("#MOVE,")
-        ) == 0
+        message.dst != ProtocolV1::NODE_LINUX &&
+        message.dst != ProtocolV1::NODE_BROADCAST
     )
     {
-        return validateMoveCommand(command);
+        /*
+         * 发给 ESP32 本机的 STM32 消息留给后续
+         * 本地服务处理器，不转发给 Linux。
+         */
+        return;
     }
 
-    return false;
+    if (!websocketClientIsReady())
+    {
+        Serial.println(
+            "STM32 V1 message dropped: "
+            "Linux WebSocket is offline"
+        );
+
+        return;
+    }
+
+    memcpy(
+        websocketTxBuffer,
+        messageData,
+        length
+    );
+
+    httpd_ws_frame_t frame = {};
+
+    frame.type = HTTPD_WS_TYPE_BINARY;
+    frame.payload = websocketTxBuffer;
+    frame.len = length;
+
+    const esp_err_t result =
+        httpd_ws_send_frame_async(
+            websocketServer,
+            websocketClientFd,
+            &frame
+        );
+
+    if (result != ESP_OK)
+    {
+        Serial.printf(
+            "STM32 to WebSocket send failed: 0x%x\n",
+            result
+        );
+
+        return;
+    }
+
+    Serial.printf(
+        "WebSocket TX V1: seq=%u, "
+        "service=0x%02X, opcode=0x%02X\n",
+        static_cast<unsigned int>(message.seq),
+        static_cast<unsigned int>(
+            message.service
+        ),
+        static_cast<unsigned int>(
+            message.opcode
+        )
+    );
 }
 
 
-/*
- * WebSocket 的处理函数。
- */
 esp_err_t websocketHandler(
     httpd_req_t *request
 )
 {
-    /*
-     * 第一次访问 /ws 时是 HTTP Upgrade 握手。
-     *
-     * esp_http_server 会处理握手，
-     * Handler 这里只需要返回成功。
-     */
     if (request->method == HTTP_GET)
     {
-        Serial.println(
-            "WebSocket client connected"
+        websocketClientFd =
+            httpd_req_to_sockfd(request);
+
+        Serial.printf(
+            "V1 WebSocket client connected: fd=%d\n",
+            websocketClientFd
         );
 
         return ESP_OK;
@@ -221,12 +271,6 @@ esp_err_t websocketHandler(
 
     httpd_ws_frame_t frame = {};
 
-    /*
-     * 第一次调用不读取数据，只查询：
-     *
-     * - 帧类型
-     * - 数据长度
-     */
     esp_err_t result =
         httpd_ws_recv_frame(
             request,
@@ -246,37 +290,30 @@ esp_err_t websocketHandler(
 
     if (
         frame.len >
-        AppConfig::WebSocket::MAX_COMMAND_LENGTH
+        ProtocolV1::MAX_MESSAGE_SIZE
     )
     {
         Serial.printf(
-            "WebSocket command too long: %u bytes\n",
+            "WebSocket V1 frame too long: %u bytes\n",
             static_cast<unsigned int>(
                 frame.len
             )
         );
 
-        /*
-         * 返回 ESP_FAIL 会关闭这个异常连接。
-         */
         return ESP_FAIL;
     }
 
     uint8_t payload[
-        AppConfig::WebSocket::MAX_COMMAND_LENGTH + 1
+        ProtocolV1::MAX_MESSAGE_SIZE
     ] = {};
 
     frame.payload = payload;
 
-    /*
-     * 第二次调用读取实际负载。
-     */
     result =
         httpd_ws_recv_frame(
             request,
             &frame,
-            AppConfig::WebSocket::
-                MAX_COMMAND_LENGTH
+            sizeof(payload)
         );
 
     if (result != ESP_OK)
@@ -289,15 +326,6 @@ esp_err_t websocketHandler(
         return result;
     }
 
-    /*
-     * 把收到的字节补成标准 C 字符串。
-     */
-    payload[frame.len] = '\0';
-
-
-    /*
-     * 响应客户端的 WebSocket Ping。
-     */
     if (frame.type == HTTPD_WS_TYPE_PING)
     {
         frame.type = HTTPD_WS_TYPE_PONG;
@@ -315,67 +343,132 @@ esp_err_t websocketHandler(
 
     if (frame.type == HTTPD_WS_TYPE_CLOSE)
     {
+        const int clientFd =
+            httpd_req_to_sockfd(request);
+
+        if (clientFd == websocketClientFd)
+        {
+            websocketClientFd = -1;
+        }
+
         Serial.println(
-            "WebSocket client requested close"
+            "V1 WebSocket client requested close"
         );
 
         return ESP_OK;
     }
 
-    /*
-     * 云台控制只接收文本帧。
-     */
-    if (frame.type != HTTPD_WS_TYPE_TEXT)
+    if (frame.type != HTTPD_WS_TYPE_BINARY)
     {
         Serial.printf(
             "Unsupported WebSocket frame type: %d\n",
-            static_cast<int>(
-                frame.type
+            static_cast<int>(frame.type)
+        );
+
+        return ESP_OK;
+    }
+
+    ProtocolV1::MessageView message = {};
+
+    const ProtocolV1::DecodeStatus status =
+        ProtocolV1::decodeMessage(
+            payload,
+            frame.len,
+            message
+        );
+
+    if (status != ProtocolV1::DecodeStatus::OK)
+    {
+        Serial.printf(
+            "WebSocket V1 message rejected: %s\n",
+            ProtocolV1::decodeStatusName(status)
+        );
+
+        return ESP_OK;
+    }
+
+    if (message.src != ProtocolV1::NODE_LINUX)
+    {
+        Serial.printf(
+            "WebSocket V1 rejected: invalid src=0x%02X\n",
+            static_cast<unsigned int>(
+                message.src
             )
         );
 
         return ESP_OK;
     }
 
-    char *command =
-        reinterpret_cast<char *>(
-            payload
-        );
-
-    trimCommand(command);
-
-    Serial.printf(
-        "WebSocket RX: %s\n",
-        command
-    );
-
-    if (!validateCommand(command))
+    if (
+        message.dst != ProtocolV1::NODE_ESP32 &&
+        message.dst != ProtocolV1::NODE_STM32 &&
+        message.dst != ProtocolV1::NODE_BROADCAST
+    )
     {
-        Serial.println(
-            "Invalid WebSocket command, ignored"
+        Serial.printf(
+            "WebSocket V1 rejected: invalid dst=0x%02X\n",
+            static_cast<unsigned int>(
+                message.dst
+            )
         );
 
         return ESP_OK;
     }
 
-    /*
-     * 命令合法，原样转发给 STM32。
-     */
-    if (!stm32UartSendCommand(command))
-    {
-        Serial.println(
-            "Failed to forward command to STM32"
-        );
+    Serial.printf(
+        "WebSocket RX V1: seq=%u, "
+        "src=0x%02X, dst=0x%02X, "
+        "service=0x%02X, opcode=0x%02X, "
+        "payload=%u\n",
+        static_cast<unsigned int>(message.seq),
+        static_cast<unsigned int>(message.src),
+        static_cast<unsigned int>(message.dst),
+        static_cast<unsigned int>(
+            message.service
+        ),
+        static_cast<unsigned int>(
+            message.opcode
+        ),
+        static_cast<unsigned int>(
+            message.payloadLength
+        )
+    );
 
-        return ESP_FAIL;
+    bool handled = false;
+
+    if (
+        message.dst == ProtocolV1::NODE_ESP32 ||
+        message.dst == ProtocolV1::NODE_BROADCAST
+    )
+    {
+        handled =
+            handleLocalMessage(
+                request,
+                message
+            ) ||
+            handled;
     }
 
-    /*
-     * 当前不向 Linux 返回 ACK。
-     *
-     * ROS 2 客户端目前只发送、不持续接收；
-     * 因此避免不断产生无人读取的返回消息。
-     */
+    if (
+        message.dst == ProtocolV1::NODE_STM32 ||
+        message.dst == ProtocolV1::NODE_BROADCAST
+    )
+    {
+        handled =
+            stm32UartSendApplicationMessage(
+                payload,
+                frame.len
+            ) ||
+            handled;
+    }
+
+    if (!handled)
+    {
+        Serial.println(
+            "WebSocket V1 message was not handled"
+        );
+    }
+
     return ESP_OK;
 }
 
@@ -403,13 +496,6 @@ bool websocketServiceRegister(
     websocketUri.handler =
         websocketHandler;
     websocketUri.user_ctx = nullptr;
-
-    /*
-     * 这一项告诉 esp_http_server：
-     *
-     * /ws 不是普通 GET 接口，
-     * 而是 WebSocket Upgrade 接口。
-     */
     websocketUri.is_websocket = true;
 
     const esp_err_t result =
@@ -428,8 +514,15 @@ bool websocketServiceRegister(
         return false;
     }
 
+    websocketServer = server;
+    websocketClientFd = -1;
+
+    stm32UartSetMessageCallback(
+        forwardStm32MessageToLinux
+    );
+
     Serial.println(
-        "WebSocket service registered: /ws"
+        "V1 binary WebSocket service registered: /ws"
     );
 
     return true;
