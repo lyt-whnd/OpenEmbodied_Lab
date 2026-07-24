@@ -58,6 +58,12 @@ The previous USB-camera and direct-serial implementation is preserved separately
 The ESP32-CAM firmware currently provides the following interfaces:
 
 ```text
+UDP <broadcast>:4210
+```
+
+Automatic device and endpoint discovery.
+
+```text
 http://<ESP32_IP>/
 ```
 
@@ -115,6 +121,63 @@ Select a scanned network or type an SSID, enter its password, and choose
 used first; after five profiles are stored, new networks replace old slots in
 round-robin order. `wifiServiceClearProfiles()` is reserved for a future
 protocol command that resets Wi-Fi provisioning.
+
+### UDP automatic discovery
+
+After Wi-Fi, HTTP, MJPEG, and WebSocket startup succeeds, the ESP32 broadcasts
+one UTF-8 JSON datagram per second to the directed subnet broadcast address on
+UDP port `4210`:
+
+```json
+{
+  "magic": "ROBOT_HELLO",
+  "proto": 1,
+  "name": "robot-v1",
+  "node": "esp32cam",
+  "device_id": "ESP32CAM_A1B2C3",
+  "ip": "192.168.103.42",
+  "ws_port": 80,
+  "ws_path": "/ws",
+  "stream_port": 81,
+  "stream_path": "/stream"
+}
+```
+
+Discovery is only the connection bootstrap. V1 control and telemetry still use
+WebSocket, while camera frames remain on HTTP MJPEG.
+
+The Linux listener validates the magic, protocol version, fields, ports, and
+paths. It deliberately builds URLs from the UDP packet's source IPv4 address
+instead of trusting the self-reported `ip` JSON field. This handles DHCP
+address changes without hard-coded addresses.
+
+After building and sourcing the ROS 2 workspace, discover one robot with:
+
+```bash
+ros2 run vision_demo esp32_discovery --once --timeout 10
+```
+
+Example output:
+
+```text
+device_id: ESP32CAM_A1B2C3
+ip:        192.168.103.42
+WebSocket: ws://192.168.103.42:80/ws
+MJPEG:     http://192.168.103.42:81/stream
+```
+
+For scripts, request one JSON result:
+
+```bash
+ros2 run vision_demo esp32_discovery \
+  --once \
+  --timeout 10 \
+  --json
+```
+
+Use `--device-id ESP32CAM_A1B2C3` when multiple robots are present. Without
+`--once`, the listener remains active and prints a device again only when its
+advertised endpoint changes.
 
 ### V1 application message
 
@@ -237,6 +300,8 @@ used by this ESP32 firmware.
 - NVS storage for five Wi-Fi profiles
 - 30-second automatic Wi-Fi selection
 - SoftAP captive Wi-Fi provisioning page
+- ESP32 UDP endpoint discovery broadcast
+- Linux validated UDP discovery listener
 - PWM servo control
 
 ### In Progress
@@ -297,13 +362,15 @@ OpenEmbodied_Lab/
 │       ├── vision_demo/
 │       │   ├── __init__.py
 │       │   ├── protocol_v1.py
+│       │   ├── esp32_discovery.py
 │       │   ├── esp32_camera_node.py
 │       │   ├── color_tracker_node.py
 │       │   ├── gimbal_pd_websocket_node.py
 │       │   ├── gimbal_pd_serial_node.py
 │       │   └── image_viewer_node.py
 │       ├── test/
-│       │   └── test_protocol_v1.py
+│       │   ├── test_protocol_v1.py
+│       │   └── test_esp32_discovery.py
 │       ├── package.xml
 │       └── setup.py
 ├── ESP_control/
@@ -312,6 +379,8 @@ OpenEmbodied_Lab/
 │   │   ├── protocol_v1.cpp
 │   │   ├── uart_framing.h
 │   │   ├── uart_framing.cpp
+│   │   ├── udp_discovery_service.h
+│   │   ├── udp_discovery_service.cpp
 │   │   ├── websocket_service.cpp
 │   │   └── stm32_uart.cpp
 │   └── tests/
@@ -1015,6 +1084,8 @@ Then log out and log back in.
 - [x] STM32-to-Linux validated V1 forwarding
 - [x] NVS multi-network Wi-Fi provisioning
 - [x] SoftAP fallback configuration page
+- [x] ESP32 UDP endpoint discovery broadcast
+- [x] Linux UDP discovery parser and command
 
 ### In Progress
 

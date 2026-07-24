@@ -5,6 +5,7 @@
 #include "camera_service.h"
 #include "wifi_service.h"
 #include "http_service.h"
+#include "udp_discovery_service.h"
 
 #include "stm32_uart.h"
 
@@ -59,7 +60,7 @@ void setup()
     }
 
     /*
-     * 2. 连接 Wi-Fi。
+     * 3. 连接 Wi-Fi。
      */
     if (!wifiServiceConnect())
     {
@@ -69,12 +70,22 @@ void setup()
     }
 
     /*
-     * 3. 启动网页和视频流服务。
+     * 4. 启动网页和视频流服务。
      */
     if (!httpServiceStart())
     {
         stopProgram(
             "HTTP service failed"
+        );
+    }
+
+    /*
+     * 5. 启动局域网 UDP 自动发现。
+     */
+    if (!udpDiscoveryStart())
+    {
+        stopProgram(
+            "UDP discovery service failed"
         );
     }
 
@@ -106,6 +117,11 @@ void loop()
      * 检查 STM32 是否返回 ACK 或状态信息。
      */
     stm32UartPoll();
+
+    /*
+     * 每秒广播一次设备身份和服务端点。
+     */
+    udpDiscoveryPoll();
     /*
      * 不使用长时间 delay，
      * 避免 STM32 返回数据积压。

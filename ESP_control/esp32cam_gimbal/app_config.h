@@ -44,6 +44,20 @@ namespace AppConfig
     static constexpr uint16_t HTTP_PORT = 80;
     static constexpr uint16_t STREAM_PORT = 81;
 
+    /*
+     * Linux 自动发现 ESP32-CAM 的 UDP 广播。
+     */
+    namespace Discovery
+    {
+        static constexpr uint16_t PORT = 4210;
+        static constexpr uint32_t INTERVAL_MS = 1000;
+        static constexpr const char *MAGIC = "ROBOT_HELLO";
+        static constexpr const char *ROBOT_NAME = "robot-v1";
+        static constexpr const char *NODE_NAME = "esp32cam";
+        static constexpr const char *WEBSOCKET_PATH = "/ws";
+        static constexpr const char *STREAM_PATH = "/stream";
+    }
+
 
     /*
  * ESP32-CAM 与 STM32 的串口配置。
