@@ -36,7 +36,7 @@ OpenCV Target Detection
         ▼
 PD Controller
         │
-        │ WebSocket command
+        │ WebSocket V1 binary message
         ▼
 ESP32-CAM
         │
@@ -81,15 +81,60 @@ The control interface is designed as:
 ws://<ESP32_IP>/ws
 ```
 
-ROS 2 sends commands such as:
+Linux sends one complete V1 application message in each binary WebSocket
+frame. Video remains on the independent HTTP MJPEG connection.
+
+### V1 application message
+
+The transport-independent header is exactly 10 bytes:
+
+| Offset | Size | Field | Encoding |
+|---:|---:|---|---|
+| 0 | 1 | `version` | V1 is `0x01` |
+| 1 | 1 | `flags` | ACK, response, error, real-time |
+| 2 | 1 | `src` | Source node |
+| 3 | 1 | `dst` | Destination node |
+| 4 | 1 | `service` | System, motion, telemetry, config, event, OTA |
+| 5 | 1 | `opcode` | Operation within the service |
+| 6 | 2 | `seq` | Unsigned 16-bit, little-endian |
+| 8 | 2 | `payload_len` | Unsigned 16-bit, little-endian |
+| 10 | N | `payload` | At most 256 bytes |
+
+Node identifiers are:
 
 ```text
-#MOVE,-1,2
-#STOP
-#CENTER
+Linux     0x01
+ESP32     0x02
+STM32     0x03
+Broadcast 0xFF
 ```
 
-ESP32-CAM forwards these commands to STM32 through UART.
+The Linux implementation is:
+
+```text
+src/vision_demo/vision_demo/protocol_v1.py
+```
+
+`MOTION/MOVE` currently uses a fixed 12-byte little-endian payload:
+
+| Field | Type | Unit |
+|---|---|---|
+| `control_epoch` | `uint16` | Control ownership generation |
+| `valid_ms` | `uint16` | Command lifetime |
+| `linear_mm_s` | `int16` | Tracked-base linear velocity |
+| `angular_mrad_s` | `int16` | Tracked-base angular velocity |
+| `head_yaw_rate_x10` | `int16` | 0.1 degree/second |
+| `head_pitch_rate_x10` | `int16` | 0.1 degree/second |
+
+The current PD node sets both tracked-base velocity fields to zero and fills
+the two head-rate fields. `MOVE` uses the real-time flag and only the newest
+pending command is retained. `STOP` uses the ACK-required flag.
+This stage implements the Linux transmit path; ACK reception, timeout, and
+retry handling will be added with the bidirectional WebSocket link manager.
+
+The ESP32 V1 decoder/router and UART COBS/CRC framing are the next transport
+stage. Until the ESP32 binary decoder is added, the new Linux sender will not
+interoperate with firmware that accepts only legacy `#MOVE` text frames.
 
 ---
 
@@ -107,6 +152,8 @@ ESP32-CAM forwards these commands to STM32 through UART.
 - OpenCV target detection
 - Target center offset calculation
 - PD gimbal controller
+- Linux V1 application protocol codec
+- Binary WebSocket motion sender
 - STM32 UART command protocol
 - PWM servo control
 
@@ -114,6 +161,8 @@ ESP32-CAM forwards these commands to STM32 through UART.
 
 - ESP32 WebSocket command server
 - ESP32-to-STM32 UART bridge
+- ESP32 V1 binary decoder and message router
+- UART COBS framing and CRC16
 - YOLO target detection
 - RK3568 deployment
 - Low-latency frame processing
@@ -166,11 +215,14 @@ OpenEmbodied_Lab/
 │       │   └── vision_demo
 │       ├── vision_demo/
 │       │   ├── __init__.py
+│       │   ├── protocol_v1.py
 │       │   ├── esp32_camera_node.py
 │       │   ├── color_tracker_node.py
 │       │   ├── gimbal_pd_websocket_node.py
 │       │   ├── gimbal_pd_serial_node.py
 │       │   └── image_viewer_node.py
+│       ├── test/
+│       │   └── test_protocol_v1.py
 │       ├── package.xml
 │       └── setup.py
 ├── README.md
@@ -426,6 +478,9 @@ gimbal_pd_websocket_node:
     target_timeout_sec: 0.5
     command_refresh_sec: 0.5
     reconnect_delay_sec: 2.0
+
+    motion_valid_ms: 300
+    control_epoch: 1
 ```
 
 Replace:
@@ -636,15 +691,20 @@ ros2 run vision_demo gimbal_pd_websocket \
   -p websocket_url:="ws://192.168.1.100/ws"
 ```
 
-The node sends commands such as:
+The node sends binary messages with the V1 header:
 
 ```text
-#MOVE,-1,2
-#STOP
-#CENTER
+Linux -> STM32
+service = MOTION (0x10)
+opcode  = MOVE (0x01) or STOP (0x02)
+seq     = wrapping uint16
 ```
 
-If the ESP32 WebSocket server has not yet been implemented, the node will report connection failures while the image receiver can still operate normally.
+The `websocket-client` call uses a binary WebSocket frame; it does not send
+the former `#MOVE` strings. The ESP32 must decode the 10-byte application
+header before routing the message to STM32. If the ESP32 V1 WebSocket decoder
+has not yet been implemented, the node can connect but its binary frames will
+not be executed. The image receiver remains independent.
 
 ---
 
@@ -831,11 +891,17 @@ Then log out and log back in.
 - [x] MJPEG video streaming
 - [x] ROS 2 ESP32-CAM image receiver
 - [x] ROS 2 image topic publication
+- [x] Linux V1 application protocol codec
+- [x] Linux binary WebSocket motion sender
+- [x] V1 protocol fixed-vector unit tests
 
 ### In Progress
 
-- [ ] ESP32 WebSocket server
-- [ ] ESP32 UART command forwarding
+- [x] ESP32 legacy WebSocket server
+- [x] ESP32 legacy UART command forwarding
+- [ ] ESP32 V1 binary WebSocket decoder
+- [ ] ESP32 V1 message router
+- [ ] ESP32-to-STM32 COBS and CRC16 framing
 - [ ] Complete Wi-Fi gimbal control loop
 - [ ] YOLO detection node
 - [ ] Latest-frame-only inference pipeline

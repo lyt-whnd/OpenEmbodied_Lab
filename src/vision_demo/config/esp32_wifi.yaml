@@ -33,3 +33,7 @@ gimbal_pd_websocket_node:
     target_timeout_sec: 0.5
     command_refresh_sec: 0.5
     reconnect_delay_sec: 2.0
+
+    # V1 MOTION/MOVE command lifetime and control ownership generation.
+    motion_valid_ms: 300
+    control_epoch: 1
