@@ -1,0 +1,24 @@
+--cpu Cortex-M3
+"ros2\startup_stm32f103xb.o"
+"ros2\main.o"
+"ros2\stm32f1xx_it.o"
+"ros2\stm32f1xx_hal_msp.o"
+"ros2\stm32f1xx_hal_gpio_ex.o"
+"ros2\stm32f1xx_hal_tim.o"
+"ros2\stm32f1xx_hal_tim_ex.o"
+"ros2\stm32f1xx_hal.o"
+"ros2\stm32f1xx_hal_rcc.o"
+"ros2\stm32f1xx_hal_rcc_ex.o"
+"ros2\stm32f1xx_hal_gpio.o"
+"ros2\stm32f1xx_hal_dma.o"
+"ros2\stm32f1xx_hal_cortex.o"
+"ros2\stm32f1xx_hal_pwr.o"
+"ros2\stm32f1xx_hal_flash.o"
+"ros2\stm32f1xx_hal_flash_ex.o"
+"ros2\stm32f1xx_hal_exti.o"
+"ros2\stm32f1xx_hal_uart.o"
+"ros2\system_stm32f1xx.o"
+--strict --scatter "ros2\ros2.sct"
+--summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list "ros2.map" -o ros2\ros2.axf
