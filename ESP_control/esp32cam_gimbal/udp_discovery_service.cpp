@@ -12,6 +12,7 @@ namespace
 
 WiFiUDP discoveryUdp;
 bool discoveryStarted = false;
+bool broadcastSuppressed = false;
 unsigned long lastBroadcastAt = 0;
 
 
@@ -147,6 +148,7 @@ bool udpDiscoveryStart()
     }
 
     discoveryStarted = true;
+    broadcastSuppressed = false;
     lastBroadcastAt = 0;
 
     Serial.printf(
@@ -164,7 +166,9 @@ bool udpDiscoveryStart()
 }
 
 
-void udpDiscoveryPoll()
+void udpDiscoveryPoll(
+    bool linuxWebSocketConnected
+)
 {
     if (
         !discoveryStarted ||
@@ -172,6 +176,35 @@ void udpDiscoveryPoll()
     )
     {
         return;
+    }
+
+    if (linuxWebSocketConnected)
+    {
+        if (!broadcastSuppressed)
+        {
+            broadcastSuppressed = true;
+            Serial.println(
+                "UDP discovery paused: Linux WebSocket connected"
+            );
+        }
+
+        return;
+    }
+
+    if (broadcastSuppressed)
+    {
+        broadcastSuppressed = false;
+
+        /*
+         * 断线后不再等待一个完整周期，下一段代码会立即广播。
+         */
+        lastBroadcastAt =
+            millis() -
+            AppConfig::Discovery::INTERVAL_MS;
+
+        Serial.println(
+            "UDP discovery resumed: Linux WebSocket disconnected"
+        );
     }
 
     if (
@@ -193,4 +226,5 @@ void udpDiscoveryStop()
 
     discoveryUdp.stop();
     discoveryStarted = false;
+    broadcastSuppressed = false;
 }

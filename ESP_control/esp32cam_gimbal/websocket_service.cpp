@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 
+#include <atomic>
 #include <string.h>
 
 #include "protocol_v1.h"
@@ -25,6 +26,12 @@ bool websocketServiceRegister(
 }
 
 
+bool websocketServiceHasClient()
+{
+    return false;
+}
+
+
 #else
 
 
@@ -32,7 +39,7 @@ namespace
 {
 
 httpd_handle_t websocketServer = nullptr;
-int websocketClientFd = -1;
+std::atomic<int> websocketClientFd(-1);
 
 uint8_t websocketTxBuffer[
     ProtocolV1::MAX_MESSAGE_SIZE
@@ -41,21 +48,35 @@ uint8_t websocketTxBuffer[
 
 bool websocketClientIsReady()
 {
+    const int clientFd = websocketClientFd.load();
+
     if (
         websocketServer == nullptr ||
-        websocketClientFd < 0
+        clientFd < 0
     )
     {
         return false;
     }
 
-    return (
+    const bool ready = (
         httpd_ws_get_fd_info(
             websocketServer,
-            websocketClientFd
+            clientFd
         ) ==
         HTTPD_WS_CLIENT_WEBSOCKET
     );
+
+    if (!ready)
+    {
+        int expectedFd = clientFd;
+
+        websocketClientFd.compare_exchange_strong(
+            expectedFd,
+            -1
+        );
+    }
+
+    return ready;
 }
 
 
@@ -224,7 +245,7 @@ void forwardStm32MessageToLinux(
     const esp_err_t result =
         httpd_ws_send_frame_async(
             websocketServer,
-            websocketClientFd,
+            websocketClientFd.load(),
             &frame
         );
 
@@ -258,12 +279,13 @@ esp_err_t websocketHandler(
 {
     if (request->method == HTTP_GET)
     {
-        websocketClientFd =
-            httpd_req_to_sockfd(request);
+        websocketClientFd.store(
+            httpd_req_to_sockfd(request)
+        );
 
         Serial.printf(
             "V1 WebSocket client connected: fd=%d\n",
-            websocketClientFd
+            websocketClientFd.load()
         );
 
         return ESP_OK;
@@ -346,10 +368,12 @@ esp_err_t websocketHandler(
         const int clientFd =
             httpd_req_to_sockfd(request);
 
-        if (clientFd == websocketClientFd)
-        {
-            websocketClientFd = -1;
-        }
+        int expectedFd = clientFd;
+
+        websocketClientFd.compare_exchange_strong(
+            expectedFd,
+            -1
+        );
 
         Serial.println(
             "V1 WebSocket client requested close"
@@ -515,7 +539,7 @@ bool websocketServiceRegister(
     }
 
     websocketServer = server;
-    websocketClientFd = -1;
+    websocketClientFd.store(-1);
 
     stm32UartSetMessageCallback(
         forwardStm32MessageToLinux
@@ -526,6 +550,12 @@ bool websocketServiceRegister(
     );
 
     return true;
+}
+
+
+bool websocketServiceHasClient()
+{
+    return websocketClientIsReady();
 }
 
 

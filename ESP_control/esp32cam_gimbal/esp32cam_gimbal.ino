@@ -6,6 +6,7 @@
 #include "wifi_service.h"
 #include "http_service.h"
 #include "udp_discovery_service.h"
+#include "websocket_service.h"
 
 #include "stm32_uart.h"
 
@@ -119,9 +120,12 @@ void loop()
     stm32UartPoll();
 
     /*
-     * 每秒广播一次设备身份和服务端点。
+     * 未连接 Linux 时广播设备身份和服务端点；WebSocket 连接后
+     * 暂停广播，断开后立即恢复。
      */
-    udpDiscoveryPoll();
+    udpDiscoveryPoll(
+        websocketServiceHasClient()
+    );
     /*
      * 不使用长时间 delay，
      * 避免 STM32 返回数据积压。
