@@ -144,7 +144,9 @@ UDP port `4210`:
 ```
 
 Discovery is only the connection bootstrap. V1 control and telemetry still use
-WebSocket, while camera frames remain on HTTP MJPEG.
+WebSocket, while camera frames remain on HTTP MJPEG. The ESP32 pauses discovery
+broadcasts as soon as a Linux WebSocket client is connected. It keeps the UDP
+socket open and immediately resumes broadcasting when that client disconnects.
 
 The Linux listener validates the magic, protocol version, fields, ports, and
 paths. It deliberately builds URLs from the UDP packet's source IPv4 address
@@ -217,6 +219,15 @@ ESP_control/esp32cam_gimbal/protocol_v1.h
 ESP_control/esp32cam_gimbal/protocol_v1.cpp
 ```
 
+The STM32 transport and motion implementations are:
+
+```text
+stm32_control/ros2/Core/Inc/robot_protocol.h
+stm32_control/ros2/Core/Src/robot_protocol.c
+stm32_control/ros2/Core/Inc/robot_motion.h
+stm32_control/ros2/Core/Src/robot_motion.c
+```
+
 `MOTION/MOVE` currently uses a fixed 12-byte little-endian payload:
 
 | Field | Type | Unit |
@@ -231,8 +242,8 @@ ESP_control/esp32cam_gimbal/protocol_v1.cpp
 The current PD node sets both tracked-base velocity fields to zero and fills
 the two head-rate fields. `MOVE` uses the real-time flag and only the newest
 pending command is retained. `STOP` uses the ACK-required flag.
-This stage implements the Linux transmit path; ACK reception, timeout, and
-retry handling will be added with the bidirectional WebSocket link manager.
+The current STM32 head controller rejects non-zero tracked-base velocity
+fields until the tracked-base actuator layer is implemented.
 
 The ESP32 validates the V1 version, known flags, payload limit, exact frame
 length, source node, and destination node before routing a message. Messages
@@ -271,9 +282,13 @@ CRC checking, V1 validation, and source/destination checking. Valid STM32
 messages addressed to Linux are returned as binary WebSocket frames. Only
 one active Linux WebSocket client is retained by the current firmware.
 
-STM32 must implement the same COBS/CRC framing before the new binary control
-path can operate end to end; the former newline text UART format is no longer
-used by this ESP32 firmware.
+The STM32 now implements the matching stream decoder and transmitter. It drops
+oversized, malformed, wrong-destination, bad-CRC, and stale MOVE frames before
+they reach motion control. MOVE expires after `valid_ms`; STOP holds the
+current angles, CENTER returns to 90/90, and ESTOP remains latched until
+CLEAR_ESTOP. Reliable commands receive a two-byte little-endian status response
+with the original service, opcode, and sequence. The ESP32 routes that response
+back to Linux. The former newline text UART format is no longer used.
 
 ---
 
@@ -302,12 +317,14 @@ used by this ESP32 firmware.
 - SoftAP captive Wi-Fi provisioning page
 - ESP32 UDP endpoint discovery broadcast
 - Linux validated UDP discovery listener
+- UDP broadcast pause while Linux WebSocket is connected
+- Linux interactive keyboard and random-motion test node
+- STM32 V1, COBS, and CRC16 decoder/transmitter
+- STM32 safe MOVE timeout, sequence filtering, and motion command handler
 - PWM servo control
 
 ### In Progress
 
-- STM32 V1 application protocol decoder
-- STM32 COBS and CRC16 UART receiver
 - Linux ACK reception, timeout, and retry handling
 - YOLO target detection
 - RK3568 deployment
@@ -363,6 +380,7 @@ OpenEmbodied_Lab/
 │       │   ├── __init__.py
 │       │   ├── protocol_v1.py
 │       │   ├── esp32_discovery.py
+│       │   ├── keyboard_motion_node.py
 │       │   ├── esp32_camera_node.py
 │       │   ├── color_tracker_node.py
 │       │   ├── gimbal_pd_websocket_node.py
@@ -370,7 +388,8 @@ OpenEmbodied_Lab/
 │       │   └── image_viewer_node.py
 │       ├── test/
 │       │   ├── test_protocol_v1.py
-│       │   └── test_esp32_discovery.py
+│       │   ├── test_esp32_discovery.py
+│       │   └── test_keyboard_motion.py
 │       ├── package.xml
 │       └── setup.py
 ├── ESP_control/
@@ -385,6 +404,17 @@ OpenEmbodied_Lab/
 │   │   └── stm32_uart.cpp
 │   └── tests/
 │       └── protocol_v1_host_test.cpp
+├── stm32_control/
+│   ├── ros2/Core/
+│   │   ├── Inc/
+│   │   │   ├── robot_protocol.h
+│   │   │   └── robot_motion.h
+│   │   └── Src/
+│   │       ├── robot_protocol.c
+│   │       ├── robot_motion.c
+│   │       └── main.c
+│   └── tests/
+│       └── robot_protocol_host_test.c
 ├── README.md
 └── .gitignore
 ```
@@ -615,6 +645,31 @@ g++ \
 The test covers the shared Linux/ESP32 fixed byte vector, PONG encoding,
 CRC16 reference vector, COBS round trips, corrupted frames, and the maximum
 V1 payload size.
+
+### STM32 protocol host test
+
+The STM32 protocol and motion layers are ordinary C and can be tested without
+Keil or hardware:
+
+```bash
+gcc \
+  -std=c11 \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -pedantic \
+  -I stm32_control/ros2/Core/Inc \
+  stm32_control/ros2/Core/Src/robot_protocol.c \
+  stm32_control/ros2/Core/Src/robot_motion.c \
+  stm32_control/tests/robot_protocol_host_test.c \
+  -o /tmp/robot_protocol_host_test
+
+/tmp/robot_protocol_host_test
+```
+
+This checks the CRC reference vector, COBS framing, MOVE integration and
+timeout, duplicate sequence rejection, CENTER, corrupted-frame rejection, and
+STM32-to-Linux telemetry framing.
 
 ---
 
@@ -886,9 +941,62 @@ seq     = wrapping uint16
 
 The `websocket-client` call uses a binary WebSocket frame; it does not send
 the former `#MOVE` strings. The ESP32 decodes the 10-byte application header
-and routes STM32 messages through its COBS/CRC16 UART transport. The remaining
-end-to-end dependency is the matching STM32 V1 UART decoder. The image
-receiver remains independent.
+and routes STM32 messages through its COBS/CRC16 UART transport. STM32 decodes
+the same V1 message, applies the motion safety rules, and routes responses back
+through ESP32. The image receiver remains independent.
+
+---
+
+## Run the Keyboard Motion Test
+
+The keyboard node never opens an STM32 serial port. It discovers the ESP32,
+connects to its WebSocket, sends a Linux-to-STM32 V1 message, and lets the
+ESP32 add UART COBS/CRC framing and route it:
+
+```text
+Linux keyboard node
+        ↓ WebSocket V1
+ESP32 router
+        ↓ UART COBS(V1 + CRC16) + 0x00
+STM32 motion controller
+```
+
+Run it in an interactive terminal:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+
+ros2 run vision_demo keyboard_motion
+```
+
+Controls:
+
+```text
+↑ ↓ ← →   move the pitch/yaw servos
+b         toggle automatic random up/down/left/right movement
+q         STOP, CENTER, close WebSocket, and quit
+```
+
+The default node discovers the first ESP32 broadcast. To select one robot:
+
+```bash
+ros2 run vision_demo keyboard_motion \
+  --ros-args \
+  -p device_id:="ESP32CAM_A1B2C3"
+```
+
+To bypass discovery during diagnostics only:
+
+```bash
+ros2 run vision_demo keyboard_motion \
+  --ros-args \
+  -p websocket_url:="ws://192.168.103.42:80/ws"
+```
+
+Arrow commands are refreshed at 10 Hz with a 300 ms validity window. If Linux,
+WebSocket, ESP32 routing, or command generation stalls, STM32 stops changing
+the target angles when the validity window expires.
 
 ---
 
@@ -1086,13 +1194,16 @@ Then log out and log back in.
 - [x] SoftAP fallback configuration page
 - [x] ESP32 UDP endpoint discovery broadcast
 - [x] Linux UDP discovery parser and command
+- [x] UDP discovery pauses while WebSocket is connected
+- [x] Linux keyboard/random V1 motion test node
+- [x] STM32 V1 application decoder and transmitter
+- [x] STM32 COBS and CRC16 UART framing
+- [x] STM32 MOVE timeout and stale-sequence protection
 
 ### In Progress
 
-- [x] ESP32 legacy WebSocket server
-- [x] ESP32 legacy UART command forwarding
-- [ ] STM32 V1 application decoder
-- [ ] STM32 COBS and CRC16 UART receiver
+- [x] ESP32 V1 WebSocket server
+- [x] ESP32 V1 UART routing
 - [ ] Linux ACK receive, timeout, and retry
 - [ ] Complete Wi-Fi gimbal control loop
 - [ ] YOLO detection node

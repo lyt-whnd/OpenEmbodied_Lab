@@ -22,10 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-
+#include "robot_motion.h"
 
 /* USER CODE END Includes */
 
@@ -51,29 +48,8 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
-
 uint8_t rx_data;
-
-#define RX_BUF_SIZE 64
-char rx_buf[RX_BUF_SIZE];
-uint8_t rx_index = 0;
-
-/*
- * pitch: 上下舵机，PA6 / TIM3_CH1
- * yaw:   左右舵机，PA7 / TIM3_CH2
- */
-int16_t pitch_angle = 90;
-int16_t yaw_angle = 90;
-
-/*
- * 安全限位，先不要直接打满 0~180
- */
-#define YAW_MIN     20
-#define YAW_MAX     160
-#define PITCH_MIN   30
-#define PITCH_MAX   150
-
-
+RobotMotionController robot_motion;
 
 /* USER CODE END PV */
 
@@ -92,19 +68,6 @@ static void MX_USART1_UART_Init(void);
 
 #define SERVO_MIN_PULSE 500
 #define SERVO_MAX_PULSE 2500
-
-static int16_t clamp_i16(int16_t value, int16_t min, int16_t max)
-{
-    if (value < min) {
-        return min;
-    }
-
-    if (value > max) {
-        return max;
-    }
-
-    return value;
-}
 
 static uint16_t Servo_Angle_To_Pulse(uint8_t angle)
 {
@@ -136,180 +99,42 @@ void Servo_Set_LeftRight(uint8_t angle)
     );
 }
 
-static void Gimbal_Apply_Angle(void)
+/*
+ * robot_motion 的唯一硬件输出接口。
+ * 协议层、限位和运动超时均不依赖 HAL 或定时器。
+ */
+static void Robot_Apply_Servo_Angles(
+    uint8_t yaw_angle,
+    uint8_t pitch_angle,
+    void *user_context
+)
 {
-    yaw_angle = clamp_i16(yaw_angle, YAW_MIN, YAW_MAX);
-    pitch_angle = clamp_i16(pitch_angle, PITCH_MIN, PITCH_MAX);
+    (void)user_context;
 
-    Servo_Set_LeftRight((uint8_t)yaw_angle);
-    Servo_Set_UpDown((uint8_t)pitch_angle);
+    Servo_Set_LeftRight(yaw_angle);
+    Servo_Set_UpDown(pitch_angle);
 }
 
-static void UART_Send_String(const char *str)
+/*
+ * robot_protocol 的唯一 UART 输出接口。
+ * 发出的内容已经是 COBS(V1 + CRC16) + 0x00。
+ */
+static bool Robot_UART_Transmit(
+    const uint8_t *data,
+    uint16_t length,
+    void *user_context
+)
 {
-    HAL_UART_Transmit(
-        &huart1,
-        (uint8_t *)str,
-        strlen(str),
-        100
+    (void)user_context;
+
+    return (
+        HAL_UART_Transmit(
+            &huart1,
+            (uint8_t *)data,
+            length,
+            100
+        ) == HAL_OK
     );
-}
-
-static void Send_OK(void)
-{
-    UART_Send_String("#OK\r\n");
-}
-
-static void Send_ERR(void)
-{
-    UART_Send_String("#ERR\r\n");
-}
-
-static void Send_State(void)
-{
-    char tx_buf[64];
-
-    snprintf(
-        tx_buf,
-        sizeof(tx_buf),
-        "#STATE,%d,%d\r\n",
-        yaw_angle,
-        pitch_angle
-    );
-
-    UART_Send_String(tx_buf);
-}
-
-static void Protocol_Process_Line(char *line)
-{
-		int len = strlen(line);
-
-    while (len > 0 &&
-           (line[len - 1] == ' ' ||
-            line[len - 1] == '\r' ||
-            line[len - 1] == '\n' ||
-            line[len - 1] == '\t'))
-    {
-        line[len - 1] = '\0';
-        len--;
-    }
-		
-    int yaw;
-    int pitch;
-    int dyaw;
-    int dpitch;
-
-    /*
-     * #SET,yaw,pitch
-     * 例如：#SET,90,90
-     */
-    if (sscanf(line, "#SET,%d,%d", &yaw, &pitch) == 2)
-    {
-        yaw_angle = (int16_t)yaw;
-        pitch_angle = (int16_t)pitch;
-
-        Gimbal_Apply_Angle();
-        Send_OK();
-        return;
-    }
-
-    /*
-     * #MOVE,dyaw,dpitch
-     * 例如：#MOVE,-2,0
-     */
-    if (sscanf(line, "#MOVE,%d,%d", &dyaw, &dpitch) == 2)
-    {
-        yaw_angle += (int16_t)dyaw;
-        pitch_angle += (int16_t)dpitch;
-
-        Gimbal_Apply_Angle();
-        Send_OK();
-        return;
-    }
-
-    /*
-     * #CENTER
-     */
-    if (strcmp(line, "#CENTER") == 0)
-    {
-        yaw_angle = 90;
-        pitch_angle = 90;
-
-        Gimbal_Apply_Angle();
-        Send_OK();
-        return;
-    }
-
-    /*
-     * #STOP
-     * 对 SG90 来说，就是保持当前角度，不再更新
-     */
-    if (strcmp(line, "#STOP") == 0)
-    {
-        Send_OK();
-        return;
-    }
-
-    /*
-     * #GET
-     */
-    if (strcmp(line, "#GET") == 0)
-    {
-        Send_State();
-        return;
-    }
-
-    Send_ERR();
-}
-
-static void Protocol_Receive_Byte(uint8_t data)
-{
-    /*
-     * 只从 # 开始接收一帧
-     * 这样可以丢弃噪声、空格、残留字符
-     */
-    if (data == '#')
-    {
-        rx_index = 0;
-        rx_buf[rx_index++] = '#';
-        return;
-    }
-
-    /*
-     * 如果还没收到 #，忽略所有字符
-     */
-    if (rx_index == 0)
-    {
-        return;
-    }
-
-    /*
-     * 收到换行，说明一帧结束
-     */
-    if (data == '\n' || data == '\r')
-    {
-        if (rx_index > 1)
-        {
-            rx_buf[rx_index] = '\0';
-            Protocol_Process_Line(rx_buf);
-        }
-
-        rx_index = 0;
-        return;
-    }
-
-    /*
-     * 普通字符入缓冲区
-     */
-    if (rx_index < RX_BUF_SIZE - 1)
-    {
-        rx_buf[rx_index++] = (char)data;
-    }
-    else
-    {
-        rx_index = 0;
-        Send_ERR();
-    }
 }
 
 
@@ -353,18 +178,13 @@ int main(void)
 HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
 HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 
-yaw_angle = 90;
-pitch_angle = 90;
-Gimbal_Apply_Angle();
-
-UART_Send_String("#BOOT,OK\r\n");
-
-
-	/* ��������Ȼ��� */
-	//Servo_Set_UpDown(90);
-	//Servo_Set_LeftRight(90);
-
-	//HAL_Delay(1000);
+RobotMotion_Init(
+    &robot_motion,
+    Robot_UART_Transmit,
+    Robot_Apply_Servo_Angles,
+    NULL,
+    HAL_GetTick()
+);
 
 
 
@@ -379,12 +199,22 @@ UART_Send_String("#BOOT,OK\r\n");
     /* USER CODE BEGIN 3 */
 
 
-		if (HAL_UART_Receive(&huart1, &rx_data, 1, 10) == HAL_OK)
-		{
-				Protocol_Receive_Byte(rx_data);
-		}
+    uint32_t now_ms = HAL_GetTick();
 
+    if (HAL_UART_Receive(&huart1, &rx_data, 1, 10) == HAL_OK)
+    {
+        now_ms = HAL_GetTick();
+        RobotMotion_InputByte(
+            &robot_motion,
+            rx_data,
+            now_ms
+        );
+    }
 
+    RobotMotion_Process(
+        &robot_motion,
+        HAL_GetTick()
+    );
   }
   /* USER CODE END 3 */
 }

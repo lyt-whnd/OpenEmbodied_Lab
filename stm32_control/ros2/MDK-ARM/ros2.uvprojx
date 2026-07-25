@@ -396,6 +396,16 @@
               <FilePath>../Core/Src/main.c</FilePath>
             </File>
             <File>
+              <FileName>robot_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/robot_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>robot_motion.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/robot_motion.c</FilePath>
+            </File>
+            <File>
               <FileName>stm32f1xx_it.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/stm32f1xx_it.c</FilePath>
