@@ -104,6 +104,11 @@ setup(
                 'vision_demo.'
                 'esp32_discovery:main'
             ),
+            (
+                'keyboard_motion = '
+                'vision_demo.'
+                'keyboard_motion_node:main'
+            ),
         ],
     },
 )
