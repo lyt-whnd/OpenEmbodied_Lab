@@ -66,6 +66,7 @@ bool sendDiscoveryPacket()
         "\"ip\":\"%s\","
         "\"ws_port\":%u,"
         "\"ws_path\":\"%s\","
+        "\"tcp_port\":%u,"
         "\"stream_port\":%u,"
         "\"stream_path\":\"%s\""
         "}",
@@ -76,6 +77,9 @@ bool sendDiscoveryPacket()
         localIp.c_str(),
         static_cast<unsigned int>(AppConfig::HTTP_PORT),
         AppConfig::Discovery::WEBSOCKET_PATH,
+        static_cast<unsigned int>(
+            AppConfig::CONTROL_TCP_PORT
+        ),
         static_cast<unsigned int>(AppConfig::STREAM_PORT),
         AppConfig::Discovery::STREAM_PATH
     );
@@ -167,7 +171,7 @@ bool udpDiscoveryStart()
 
 
 void udpDiscoveryPoll(
-    bool linuxWebSocketConnected
+    bool linuxControlConnected
 )
 {
     if (
@@ -178,13 +182,13 @@ void udpDiscoveryPoll(
         return;
     }
 
-    if (linuxWebSocketConnected)
+    if (linuxControlConnected)
     {
         if (!broadcastSuppressed)
         {
             broadcastSuppressed = true;
             Serial.println(
-                "UDP discovery paused: Linux WebSocket connected"
+                "UDP discovery paused: Linux control connected"
             );
         }
 
@@ -203,7 +207,7 @@ void udpDiscoveryPoll(
             AppConfig::Discovery::INTERVAL_MS;
 
         Serial.println(
-            "UDP discovery resumed: Linux WebSocket disconnected"
+            "UDP discovery resumed: Linux control disconnected"
         );
     }
 

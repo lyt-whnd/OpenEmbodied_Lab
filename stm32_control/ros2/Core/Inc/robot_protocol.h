@@ -55,8 +55,16 @@ typedef enum
     ROBOT_SERVICE_TELEMETRY = 0x20,
     ROBOT_SERVICE_CONFIG    = 0x30,
     ROBOT_SERVICE_EVENT     = 0x40,
-    ROBOT_SERVICE_OTA       = 0x50
+    ROBOT_SERVICE_OTA       = 0x50,
+    ROBOT_SERVICE_SENSOR    = 0x60
 } RobotServiceId;
+
+typedef enum
+{
+    ROBOT_SYSTEM_PING  = 0x01,
+    ROBOT_SYSTEM_PONG  = 0x02,
+    ROBOT_SYSTEM_RESET = 0x03
+} RobotSystemOpcode;
 
 
 typedef enum
@@ -68,6 +76,43 @@ typedef enum
     ROBOT_MOTION_CLEAR_ESTOP = 0x05,
     ROBOT_MOTION_STATE       = 0x10
 } RobotMotionOpcode;
+
+typedef enum
+{
+    ROBOT_TELEMETRY_DATA  = 0x01,
+    ROBOT_TELEMETRY_BATCH = 0x02,
+    ROBOT_TELEMETRY_SAMPLE_BLOCK = 0x03
+} RobotTelemetryOpcode;
+
+typedef enum
+{
+    ROBOT_CONFIG_GET = 0x01,
+    ROBOT_CONFIG_SET = 0x02
+} RobotConfigOpcode;
+
+typedef enum
+{
+    ROBOT_EVENT_REPORT = 0x01
+} RobotEventOpcode;
+
+typedef enum
+{
+    ROBOT_OTA_START  = 0x01,
+    ROBOT_OTA_CHUNK  = 0x02,
+    ROBOT_OTA_FINISH = 0x03,
+    ROBOT_OTA_ABORT  = 0x04
+} RobotOtaOpcode;
+
+typedef enum
+{
+    ROBOT_SENSOR_LIST   = 0x01,
+    ROBOT_SENSOR_INFO   = 0x02,
+    ROBOT_SENSOR_CONFIG = 0x03,
+    ROBOT_SENSOR_START  = 0x04,
+    ROBOT_SENSOR_STOP   = 0x05,
+    ROBOT_SENSOR_DATA   = 0x06,
+    ROBOT_SENSOR_STATUS = 0x07
+} RobotSensorOpcode;
 
 
 typedef enum
@@ -85,7 +130,8 @@ typedef enum
     ROBOT_STATUS_OUT_OF_RANGE    = 10,
     ROBOT_STATUS_BUSY            = 11,
     ROBOT_STATUS_DEVICE_OFFLINE  = 12,
-    ROBOT_STATUS_NOT_IMPLEMENTED = 13
+    ROBOT_STATUS_NOT_IMPLEMENTED = 13,
+    ROBOT_STATUS_REQUEST_ID_CONFLICT = 14
 } RobotStatusCode;
 
 

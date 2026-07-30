@@ -4,8 +4,8 @@
 
 
 /*
- * Wire the WebSocket transport, bounded network TX queue, V1 router, local
- * services, and STM32 link, then register /ws on the existing HTTP server.
+ * Wire WebSocket plus TCP fallback, the bounded network TX queue, V1 router,
+ * local services, and STM32 link.
  *
  * This coordinator does not parse WebSocket frames or Protocol V1 itself.
  */
@@ -15,13 +15,13 @@ bool websocketServiceRegister(
 
 
 /*
- * Return whether the transport still owns a live Linux WebSocket client.
+ * Return whether WebSocket or TCP owns a live Linux client.
  * UDP discovery uses this state to pause and resume announcements.
  */
 bool websocketServiceHasClient();
 
 
 /*
- * Drain at most one queue-owned network message from the Arduino loop.
+ * Poll TCP input and drain at most one queued network message.
  */
 void websocketServicePoll();

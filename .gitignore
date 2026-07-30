@@ -1,8 +1,44 @@
+# ROS, CMake, and PlatformIO build products
 build/
 install/
 log/
-.vscode/
+.pio/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+Testing/
+
+# Python caches, test output, and packaging products
 __pycache__/
 *.pyc
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+dist/
+wheelhouse/
+
+# Editor and operating-system metadata
+.vscode/
+.idea/
+.clangd/
+.DS_Store
+Thumbs.db
+._*
+*.swp
+*.swo
+*~
+
+# Local secrets and private planning documents
 ESP_control/esp32cam_gimbal/secrets.h
 *.md

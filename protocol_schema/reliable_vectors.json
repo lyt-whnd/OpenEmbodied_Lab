@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "request": {
+    "epoch": 4660,
+    "request_id": 2309737967,
+    "application_payload_hex": "aabb",
+    "encoded_hex": "013412efcdab89aabb"
+  },
+  "result": {
+    "epoch": 4660,
+    "request_id": 2309737967,
+    "stage": 3,
+    "status": 13,
+    "encoded_hex": "013412efcdab89030d00"
+  }
+}

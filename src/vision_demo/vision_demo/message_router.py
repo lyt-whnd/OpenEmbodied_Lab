@@ -7,6 +7,7 @@ from vision_demo.protocol_v1 import (
     ApplicationMessage,
     ProtocolError,
 )
+from vision_demo.service_registry import lookup_policy
 
 
 MessageHandler = Callable[[ApplicationMessage, bytes], None]
@@ -24,6 +25,7 @@ class MessageRouter:
         ] = defaultdict(list)
         self._observers: List[MessageHandler] = []
         self.decode_errors = 0
+        self.policy_errors = 0
 
     def register_handler(
         self,
@@ -44,6 +46,10 @@ class MessageRouter:
             message = ApplicationMessage.decode(packet)
         except (ProtocolError, TypeError, ValueError):
             self.decode_errors += 1
+            return False
+
+        if lookup_policy(message.service, message.opcode) is None:
+            self.policy_errors += 1
             return False
 
         immutable_packet = bytes(packet)

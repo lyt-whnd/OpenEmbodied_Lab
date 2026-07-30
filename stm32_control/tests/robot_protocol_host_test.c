@@ -7,6 +7,9 @@
 #include "robot_dispatcher.h"
 #include "robot_motion.h"
 #include "robot_protocol.h"
+#include "robot_reliable.h"
+#include "robot_result_cache.h"
+#include "robot_service_registry.h"
 #include "v1_vectors.h"
 
 
@@ -53,6 +56,7 @@ typedef struct
     uint8_t yaw;
     uint8_t pitch;
     uint32_t servo_updates;
+    uint32_t transmit_count;
 } TestState;
 
 
@@ -68,6 +72,14 @@ static void write_u16_le(uint8_t *data, uint16_t value)
 {
     data[0] = (uint8_t)(value & 0xFFU);
     data[1] = (uint8_t)(value >> 8U);
+}
+
+static void write_u32_le(uint8_t *data, uint32_t value)
+{
+    data[0] = (uint8_t)(value & 0xFFU);
+    data[1] = (uint8_t)((value >> 8U) & 0xFFU);
+    data[2] = (uint8_t)((value >> 16U) & 0xFFU);
+    data[3] = (uint8_t)(value >> 24U);
 }
 
 
@@ -270,6 +282,7 @@ static bool capture_transmit(
     assert(length <= sizeof(state->wire));
     memcpy(state->wire, data, length);
     state->wire_length = length;
+    ++state->transmit_count;
     return true;
 }
 
@@ -415,6 +428,37 @@ static void assert_motion_response_wire(
             expected_length
         ) == 0
     );
+}
+
+static RobotProtocolMessage decode_last_transmit(
+    const TestState *state,
+    uint8_t *raw,
+    uint16_t *raw_length
+)
+{
+    RobotProtocolMessage message;
+
+    assert(state->wire_length > 1U);
+    assert(
+        cobs_decode(
+            state->wire,
+            (uint16_t)(state->wire_length - 1U),
+            raw,
+            raw_length
+        )
+    );
+    assert(*raw_length > ROBOT_PROTOCOL_CRC_SIZE);
+    assert(
+        RobotProtocol_DecodeMessage(
+            raw,
+            (uint16_t)(
+                *raw_length -
+                ROBOT_PROTOCOL_CRC_SIZE
+            ),
+            &message
+        ) == ROBOT_DECODE_OK
+    );
+    return message;
 }
 
 
@@ -968,7 +1012,7 @@ static void test_dispatcher_rejects_unknown_service(void)
             raw,
             (uint16_t)sizeof(raw)
         ) ==
-        ROBOT_STATUS_UNKNOWN_SERVICE
+        ROBOT_STATUS_UNKNOWN_OPCODE
     );
     assert(dispatcher.dispatched_message_count == 1U);
     assert(dispatcher.unsupported_service_count == 1U);
@@ -1013,9 +1057,327 @@ static void test_dispatcher_rejects_unknown_service(void)
     assert(response.payload_length == 2U);
     assert(
         response.payload[0] ==
-        ROBOT_STATUS_UNKNOWN_SERVICE
+        ROBOT_STATUS_UNKNOWN_OPCODE
     );
     assert(response.payload[1] == 0U);
+}
+
+static void test_service_registry_policies(void)
+{
+    const RobotMessagePolicy *move =
+        RobotServiceRegistry_Lookup(
+            ROBOT_SERVICE_MOTION,
+            ROBOT_MOTION_MOVE
+        );
+    const RobotMessagePolicy *stop =
+        RobotServiceRegistry_Lookup(
+            ROBOT_SERVICE_MOTION,
+            ROBOT_MOTION_STOP
+        );
+    const RobotMessagePolicy *ota =
+        RobotServiceRegistry_Lookup(
+            ROBOT_SERVICE_OTA,
+            ROBOT_OTA_CHUNK
+        );
+
+    assert(RobotServiceRegistry_Count() == 26U);
+    assert(move != NULL);
+    assert(move->qos == ROBOT_QOS_BEST_EFFORT);
+    assert(move->overflow == ROBOT_OVERFLOW_DROP_OLD);
+    assert(stop != NULL);
+    assert(stop->qos == ROBOT_QOS_RELIABLE);
+    assert(stop->priority == ROBOT_PRIORITY_EMERGENCY);
+    assert(ota != NULL);
+    assert(ota->qos == ROBOT_QOS_BULK);
+    assert(
+        RobotServiceRegistry_Lookup(
+            ROBOT_SERVICE_SENSOR,
+            ROBOT_SENSOR_DATA
+        )->qos == ROBOT_QOS_BEST_EFFORT
+    );
+    assert(
+        RobotServiceRegistry_Lookup(
+            ROBOT_SERVICE_MOTION,
+            0x7FU
+        ) == NULL
+    );
+}
+
+
+static void test_reliable_stop_is_executed_once(void)
+{
+    RobotMotionController controller;
+    RobotDispatcher dispatcher;
+    TestState state = {0};
+    uint8_t payload[ROBOT_RELIABLE_REQUEST_SIZE] = {0};
+    uint8_t wire[ROBOT_PROTOCOL_MAX_WIRE_SIZE] = {0};
+    uint8_t response_raw[ROBOT_PROTOCOL_MAX_RAW_SIZE] = {0};
+    uint16_t response_raw_length = 0U;
+    uint16_t wire_length;
+    RobotProtocolMessage response;
+
+    RobotMotion_Init(
+        &controller,
+        capture_servos,
+        &state,
+        0U
+    );
+    RobotDispatcher_Init(
+        &dispatcher,
+        &controller,
+        capture_transmit,
+        &state,
+        0U
+    );
+
+    payload[0] = ROBOT_RELIABLE_SCHEMA_VERSION;
+    write_u16_le(payload + 1U, 10U);
+    write_u32_le(payload + 3U, 77U);
+    wire_length = build_linux_frame(
+        ROBOT_MOTION_STOP,
+        ROBOT_FLAG_ACK_REQUIRED,
+        20U,
+        payload,
+        (uint16_t)sizeof(payload),
+        wire
+    );
+
+    feed_wire(&dispatcher, wire, wire_length, 1U);
+    feed_wire(&dispatcher, wire, wire_length, 2U);
+    feed_wire(&dispatcher, wire, wire_length, 3U);
+
+    assert(dispatcher.dispatched_message_count == 1U);
+    assert(dispatcher.duplicate_request_count == 2U);
+    assert(state.transmit_count == 4U);
+
+    response = decode_last_transmit(
+        &state,
+        response_raw,
+        &response_raw_length
+    );
+    assert(response.payload_length == ROBOT_RELIABLE_RESULT_SIZE);
+    assert(
+        response.payload[7] ==
+        ROBOT_RESULT_STAGE_APPLIED
+    );
+    assert(response.payload[8] == ROBOT_STATUS_OK);
+    assert(response.payload[9] == 0U);
+
+    /*
+     * A sender restart changes epoch, so request ID 77 is new again.
+     */
+    write_u16_le(payload + 1U, 11U);
+    wire_length = build_linux_frame(
+        ROBOT_MOTION_STOP,
+        ROBOT_FLAG_ACK_REQUIRED,
+        21U,
+        payload,
+        (uint16_t)sizeof(payload),
+        wire
+    );
+    feed_wire(&dispatcher, wire, wire_length, 4U);
+    assert(dispatcher.dispatched_message_count == 2U);
+
+    /*
+     * Expired result entries may execute again; STOP remains idempotent.
+     */
+    write_u16_le(payload + 1U, 10U);
+    wire_length = build_linux_frame(
+        ROBOT_MOTION_STOP,
+        ROBOT_FLAG_ACK_REQUIRED,
+        22U,
+        payload,
+        (uint16_t)sizeof(payload),
+        wire
+    );
+    feed_wire(
+        &dispatcher,
+        wire,
+        wire_length,
+        3U + ROBOT_RESULT_CACHE_TTL_MS
+    );
+    assert(dispatcher.dispatched_message_count == 3U);
+}
+
+
+static void test_reliable_received_then_execution_failed(void)
+{
+    RobotMotionController controller;
+    RobotDispatcher dispatcher;
+    TestState state = {0};
+    uint8_t payload[ROBOT_RELIABLE_REQUEST_SIZE] = {0};
+    uint8_t wire[ROBOT_PROTOCOL_MAX_WIRE_SIZE] = {0};
+    uint8_t response_raw[ROBOT_PROTOCOL_MAX_RAW_SIZE] = {0};
+    uint16_t response_raw_length = 0U;
+    uint16_t wire_length;
+    RobotProtocolMessage response;
+
+    RobotMotion_Init(
+        &controller,
+        capture_servos,
+        &state,
+        0U
+    );
+    RobotDispatcher_Init(
+        &dispatcher,
+        &controller,
+        capture_transmit,
+        &state,
+        0U
+    );
+
+    payload[0] = ROBOT_RELIABLE_SCHEMA_VERSION;
+    write_u16_le(payload + 1U, 20U);
+    write_u32_le(payload + 3U, 1U);
+    wire_length = build_linux_frame(
+        ROBOT_MOTION_ESTOP,
+        ROBOT_FLAG_ACK_REQUIRED,
+        30U,
+        payload,
+        (uint16_t)sizeof(payload),
+        wire
+    );
+    feed_wire(&dispatcher, wire, wire_length, 1U);
+    assert(controller.estop_latched);
+
+    write_u32_le(payload + 3U, 2U);
+    wire_length = build_linux_frame(
+        ROBOT_MOTION_CENTER,
+        ROBOT_FLAG_ACK_REQUIRED,
+        31U,
+        payload,
+        (uint16_t)sizeof(payload),
+        wire
+    );
+    feed_wire(&dispatcher, wire, wire_length, 2U);
+
+    response = decode_last_transmit(
+        &state,
+        response_raw,
+        &response_raw_length
+    );
+    assert(
+        response.flags ==
+        (
+            ROBOT_FLAG_RESPONSE |
+            ROBOT_FLAG_ERROR
+        )
+    );
+    assert(
+        response.payload[7] ==
+        ROBOT_RESULT_STAGE_FAILED
+    );
+    assert(
+        response.payload[8] ==
+        ROBOT_STATUS_ESTOP_ACTIVE
+    );
+}
+
+
+static void test_result_cache_is_bounded_and_evicts_oldest(void)
+{
+    RobotResultCache cache;
+    RobotResultCacheEntry result;
+    uint32_t request_id;
+
+    RobotResultCache_Init(&cache);
+
+    for (
+        request_id = 0U;
+        request_id <= ROBOT_RESULT_CACHE_CAPACITY;
+        ++request_id
+    )
+    {
+        RobotResultCache_Store(
+            &cache,
+            ROBOT_NODE_LINUX,
+            ROBOT_SERVICE_MOTION,
+            ROBOT_MOTION_STOP,
+            1U,
+            request_id,
+            ROBOT_RESULT_STAGE_APPLIED,
+            ROBOT_STATUS_OK,
+            request_id
+        );
+    }
+
+    assert(
+        RobotResultCache_Find(
+            &cache,
+            ROBOT_NODE_LINUX,
+            ROBOT_SERVICE_MOTION,
+            ROBOT_MOTION_STOP,
+            1U,
+            0U,
+            20U,
+            &result
+        ) == ROBOT_RESULT_CACHE_MISS
+    );
+    assert(
+        RobotResultCache_Find(
+            &cache,
+            ROBOT_NODE_LINUX,
+            ROBOT_SERVICE_MOTION,
+            ROBOT_MOTION_STOP,
+            1U,
+            ROBOT_RESULT_CACHE_CAPACITY,
+            20U,
+            &result
+        ) == ROBOT_RESULT_CACHE_FOUND
+    );
+}
+
+static void test_reliable_result_matches_cross_language_vector(void)
+{
+    TestState state = {0};
+    RobotProtocolContext protocol;
+    RobotProtocolMessage request_message = {0};
+    RobotReliableRequest request = {0};
+    RobotProtocolMessage response;
+    uint8_t raw[ROBOT_PROTOCOL_MAX_RAW_SIZE] = {0};
+    uint16_t raw_length = 0U;
+    const uint8_t expected[] =
+    {
+        1U, 0x34U, 0x12U,
+        0xEFU, 0xCDU, 0xABU, 0x89U,
+        3U, 13U, 0U
+    };
+
+    RobotProtocol_Init(
+        &protocol,
+        capture_transmit,
+        NULL,
+        &state
+    );
+    request_message.src = ROBOT_NODE_LINUX;
+    request_message.service = ROBOT_SERVICE_SYSTEM;
+    request_message.opcode = ROBOT_SYSTEM_RESET;
+    request_message.seq = 50U;
+    request.epoch = 0x1234U;
+    request.request_id = 0x89ABCDEFUL;
+
+    assert(
+        RobotReliable_SendResult(
+            &protocol,
+            &request_message,
+            &request,
+            ROBOT_RESULT_STAGE_FAILED,
+            ROBOT_STATUS_NOT_IMPLEMENTED
+        )
+    );
+    response = decode_last_transmit(
+        &state,
+        raw,
+        &raw_length
+    );
+    assert(response.payload_length == sizeof(expected));
+    assert(
+        memcmp(
+            response.payload,
+            expected,
+            sizeof(expected)
+        ) == 0
+    );
 }
 
 
@@ -1139,6 +1501,11 @@ int main(void)
     test_corrupt_frame_is_rejected();
     test_dispatcher_rejects_unknown_service();
     test_all_motion_response_bytes_are_stable();
+    test_service_registry_policies();
+    test_reliable_stop_is_executed_once();
+    test_reliable_received_then_execution_failed();
+    test_result_cache_is_bounded_and_evicts_oldest();
+    test_reliable_result_matches_cross_language_vector();
 
     puts("STM32 V1 protocol and motion host tests passed");
     return 0;

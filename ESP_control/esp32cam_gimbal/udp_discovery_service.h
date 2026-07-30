@@ -10,11 +10,11 @@ bool udpDiscoveryStart();
 /*
  * 非阻塞轮询。
  *
- * Linux WebSocket 未连接时每秒广播；连接后暂停广播，断开后立即
+ * Linux 控制链路未连接时每秒广播；连接后暂停广播，断开后立即
  * 恢复。只暂停发送，不关闭 UDP socket。
  */
 void udpDiscoveryPoll(
-    bool linuxWebSocketConnected
+    bool linuxControlConnected
 );
 
 

@@ -43,6 +43,7 @@ namespace AppConfig
     */
     static constexpr uint16_t HTTP_PORT = 80;
     static constexpr uint16_t STREAM_PORT = 81;
+    static constexpr uint16_t CONTROL_TCP_PORT = 9000;
 
     /*
      * Linux 自动发现 ESP32-CAM 的 UDP 广播。

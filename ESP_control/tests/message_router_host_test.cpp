@@ -13,6 +13,7 @@ namespace
 
 std::vector<uint8_t> networkOutput;
 std::vector<uint8_t> stm32Output;
+std::vector<std::vector<uint8_t>> networkHistory;
 unsigned int networkSendCount = 0;
 unsigned int stm32SendCount = 0;
 
@@ -23,6 +24,7 @@ bool captureNetwork(
 )
 {
     networkOutput.assign(data, data + length);
+    networkHistory.emplace_back(data, data + length);
     networkSendCount++;
     return true;
 }
@@ -43,6 +45,7 @@ void resetCapture()
 {
     networkOutput.clear();
     stm32Output.clear();
+    networkHistory.clear();
     networkSendCount = 0;
     stm32SendCount = 0;
 }
@@ -54,7 +57,9 @@ std::vector<uint8_t> encode(
     uint8_t destination,
     uint8_t service,
     uint8_t opcode,
-    uint16_t sequence
+    uint16_t sequence,
+    const uint8_t *payload = nullptr,
+    uint16_t payloadLength = 0U
 )
 {
     ProtocolV1::MessageView message = {};
@@ -66,8 +71,8 @@ std::vector<uint8_t> encode(
     message.service = service;
     message.opcode = opcode;
     message.seq = sequence;
-    message.payloadLength = 0;
-    message.payload = nullptr;
+    message.payloadLength = payloadLength;
+    message.payload = payload;
 
     std::vector<uint8_t> packet(
         ProtocolV1::MAX_MESSAGE_SIZE
@@ -85,6 +90,21 @@ std::vector<uint8_t> encode(
 
     packet.resize(length);
     return packet;
+}
+
+void writeU16(uint8_t *data, uint16_t value)
+{
+    data[0] = static_cast<uint8_t>(value & 0xFFU);
+    data[1] = static_cast<uint8_t>(value >> 8U);
+}
+
+
+void writeU32(uint8_t *data, uint32_t value)
+{
+    data[0] = static_cast<uint8_t>(value & 0xFFU);
+    data[1] = static_cast<uint8_t>(value >> 8U);
+    data[2] = static_cast<uint8_t>(value >> 16U);
+    data[3] = static_cast<uint8_t>(value >> 24U);
 }
 
 
@@ -260,6 +280,108 @@ void testInvalidBoundaryMessagesAreRejected()
     assert(stm32SendCount == 0);
 }
 
+void testReliablePingExecutesOnceAcrossThreeDeliveries()
+{
+    resetCapture();
+    uint8_t payload[7] = {1U};
+    writeU16(payload + 1U, 4U);
+    writeU32(payload + 3U, 99U);
+
+    const std::vector<uint8_t> ping = encode(
+        ProtocolV1::FLAG_ACK_REQUIRED,
+        ProtocolV1::NODE_LINUX,
+        ProtocolV1::NODE_ESP32,
+        ProtocolV1::SERVICE_SYSTEM,
+        ProtocolV1::SYSTEM_PING,
+        40U,
+        payload,
+        sizeof(payload)
+    );
+
+    assert(
+        messageRouterOnNetworkMessage(
+            ping.data(),
+            ping.size()
+        )
+    );
+    assert(networkSendCount == 3U);
+
+    assert(
+        messageRouterOnNetworkMessage(
+            ping.data(),
+            ping.size()
+        )
+    );
+    assert(
+        messageRouterOnNetworkMessage(
+            ping.data(),
+            ping.size()
+        )
+    );
+    assert(networkSendCount == 5U);
+
+    unsigned int pongCount = 0U;
+
+    for (const std::vector<uint8_t> &packet : networkHistory)
+    {
+        ProtocolV1::MessageView message = {};
+        assert(
+            ProtocolV1::decodeMessage(
+                packet.data(),
+                packet.size(),
+                message
+            ) == ProtocolV1::DecodeStatus::OK
+        );
+
+        if (
+            message.service ==
+                ProtocolV1::SERVICE_SYSTEM &&
+            message.opcode ==
+                ProtocolV1::SYSTEM_PONG
+        )
+        {
+            pongCount++;
+        }
+    }
+
+    assert(pongCount == 1U);
+
+    ProtocolV1::MessageView finalResult = {};
+    assert(
+        ProtocolV1::decodeMessage(
+            networkHistory.back().data(),
+            networkHistory.back().size(),
+            finalResult
+        ) == ProtocolV1::DecodeStatus::OK
+    );
+    assert(finalResult.payloadLength == 10U);
+    assert(finalResult.payload[7] == 2U);
+}
+
+
+void testUnregisteredOpcodeIsRejected()
+{
+    resetCapture();
+
+    const std::vector<uint8_t> unknown = encode(
+        0U,
+        ProtocolV1::NODE_LINUX,
+        ProtocolV1::NODE_ESP32,
+        ProtocolV1::SERVICE_SYSTEM,
+        0x7FU,
+        41U
+    );
+
+    assert(
+        !messageRouterOnNetworkMessage(
+            unknown.data(),
+            unknown.size()
+        )
+    );
+    assert(networkSendCount == 0U);
+    assert(stm32SendCount == 0U);
+}
+
 }
 
 
@@ -275,6 +397,8 @@ int main()
     testStm32ToNetworkPreservesOriginalBytes();
     testBroadcastUsesBothPaths();
     testInvalidBoundaryMessagesAreRejected();
+    testReliablePingExecutesOnceAcrossThreeDeliveries();
+    testUnregisteredOpcodeIsRejected();
 
     return 0;
 }

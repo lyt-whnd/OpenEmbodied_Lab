@@ -113,6 +113,11 @@ setup(
                 'vision_demo.'
                 'keyboard_motion_node:main'
             ),
+            (
+                'sensor_bridge = '
+                'vision_demo.'
+                'sensor_bridge_node:main'
+            ),
         ],
     },
 )

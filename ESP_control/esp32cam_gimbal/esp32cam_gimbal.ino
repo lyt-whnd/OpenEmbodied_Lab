@@ -108,6 +108,13 @@ void setup()
     Serial.print(WiFi.localIP());
     Serial.println("/ws");
 
+    Serial.print("TCP fallback: ");
+    Serial.print(WiFi.localIP());
+    Serial.print(":");
+    Serial.println(
+        AppConfig::CONTROL_TCP_PORT
+    );
+
     Serial.println("==============================");
 }
 
@@ -126,8 +133,8 @@ void loop()
     websocketServicePoll();
 
     /*
-     * 未连接 Linux 时广播设备身份和服务端点；WebSocket 连接后
-     * 暂停广播，断开后立即恢复。
+     * 未连接 Linux 时广播设备身份和服务端点；WebSocket 或 TCP
+     * 连接后暂停广播，断开后立即恢复。
      */
     udpDiscoveryPoll(
         websocketServiceHasClient()

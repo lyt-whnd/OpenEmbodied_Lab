@@ -1,23 +1,33 @@
 """Single full-duplex robot connection with bounded outbound storage."""
 
 import enum
-import queue
+import secrets
 import threading
 from typing import Callable, Optional
 
 from vision_demo.message_router import MessageHandler, MessageRouter
 from vision_demo.protocol_v1 import ApplicationMessage
+from vision_demo.reliable_sender import (
+    DEFAULT_PENDING_CAPACITY,
+    ReliableSender,
+)
+from vision_demo.service_registry import QosClass, require_policy
 from vision_demo.transport.base import Transport
+from vision_demo.tx_scheduler import QueueKind, TxScheduler
 
 
 TransportFactory = Callable[[], Transport]
 
 
 class SendPolicy(enum.Enum):
-    """Stage-1 outbound queue behavior."""
+    """Compatibility names for the Stage-2 bounded scheduler."""
 
-    BEST_EFFORT = 'best_effort'
-    FIFO = 'fifo'
+    BEST_EFFORT_LATEST = 'best_effort_latest'
+    BEST_EFFORT_SAMPLE = 'best_effort_sample'
+    RELIABLE = 'reliable'
+    BULK = 'bulk'
+    BEST_EFFORT = 'best_effort_latest'
+    FIFO = 'reliable'
 
 
 class RobotLink:
@@ -29,6 +39,7 @@ class RobotLink:
         reconnect_delay_sec: float = 1.0,
         queue_size: int = 8,
         router: Optional[MessageRouter] = None,
+        reliable_epoch: Optional[int] = None,
     ):
         """Create bounded state without starting a connection."""
         if reconnect_delay_sec <= 0.0:
@@ -39,16 +50,32 @@ class RobotLink:
 
         self._transport_factory = transport_factory
         self._reconnect_delay_sec = reconnect_delay_sec
-        self._fifo = queue.Queue(maxsize=queue_size)
-        self._latest_lock = threading.Lock()
-        self._latest_best_effort: Optional[bytes] = None
+        self._scheduler = TxScheduler(
+            reliable_capacity=queue_size,
+            latest_capacity=queue_size,
+            sample_capacity=max(queue_size, 8),
+            bulk_capacity=2,
+        )
         self._router = router or MessageRouter()
         self._stop_event = threading.Event()
         self._connected_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self.reliable_sender = ReliableSender(
+            enqueue=lambda packet: self.send_packet(
+                packet,
+                SendPolicy.FIFO,
+            ),
+            epoch=(
+                secrets.randbits(16)
+                if reliable_epoch is None
+                else reliable_epoch
+            ),
+            capacity=DEFAULT_PENDING_CAPACITY,
+        )
+        self._router.register_observer(
+            self.reliable_sender.handle_message
+        )
 
-        self.queue_drops = 0
-        self.best_effort_replacements = 0
         self.connection_count = 0
         self.disconnect_count = 0
         self.sent_count = 0
@@ -61,8 +88,8 @@ class RobotLink:
 
     @property
     def queue_capacity(self) -> int:
-        """Return the fixed FIFO capacity."""
-        return self._fifo.maxsize
+        """Return the fixed reliable queue capacity."""
+        return self._scheduler.reliable_capacity
 
     def register_handler(
         self,
@@ -111,41 +138,82 @@ class RobotLink:
         """Encode and enqueue one application message."""
         return self.send_packet(message.encode(), policy)
 
+    def send_message_auto(
+        self,
+        message: ApplicationMessage,
+    ) -> bool:
+        """Select bounded storage from the common message policy."""
+        policy = require_policy(message.service, message.opcode)
+
+        if policy.qos is QosClass.BEST_EFFORT:
+            return self.send_message(
+                message,
+                SendPolicy.BEST_EFFORT_LATEST,
+            )
+        if policy.qos is QosClass.BULK:
+            return self.send_message(message, SendPolicy.BULK)
+        return self.send_message(message, SendPolicy.RELIABLE)
+
+    def send_reliable(
+        self,
+        *,
+        dst: int,
+        service: int,
+        opcode: int,
+        payload: bytes = b'',
+    ):
+        """Create and retain one reliable request until final RESULT."""
+        return self.reliable_sender.send(
+            dst=dst,
+            service=service,
+            opcode=opcode,
+            payload=payload,
+        )
+
     def send_packet(self, packet: bytes, policy: SendPolicy) -> bool:
         """Queue one immutable packet according to a bounded policy."""
-        immutable_packet = bytes(packet)
-
-        if policy is SendPolicy.BEST_EFFORT:
-            with self._latest_lock:
-                if self._latest_best_effort is not None:
-                    self.best_effort_replacements += 1
-
-                self._latest_best_effort = immutable_packet
-
-            return True
-
-        try:
-            self._fifo.put_nowait(immutable_packet)
-            return True
-        except queue.Full:
-            self.queue_drops += 1
-            return False
+        message = ApplicationMessage.decode(packet)
+        message_policy = require_policy(
+            message.service,
+            message.opcode,
+        )
+        kind = {
+            SendPolicy.RELIABLE: QueueKind.RELIABLE,
+            SendPolicy.BEST_EFFORT_LATEST:
+                QueueKind.BEST_EFFORT_LATEST,
+            SendPolicy.BEST_EFFORT_SAMPLE:
+                QueueKind.BEST_EFFORT_SAMPLE,
+            SendPolicy.BULK: QueueKind.BULK,
+        }[policy]
+        return self._scheduler.enqueue(
+            packet,
+            kind=kind,
+            policy=message_policy,
+            key=(
+                message.dst,
+                message.service,
+                message.opcode,
+            ),
+        )
 
     def discard_stale_best_effort(self) -> None:
         """Discard a MOVE/latest-value packet across reconnect boundaries."""
-        with self._latest_lock:
-            self._latest_best_effort = None
+        self._scheduler.discard_best_effort()
 
     def _take_next_packet(self) -> Optional[bytes]:
-        try:
-            return self._fifo.get_nowait()
-        except queue.Empty:
-            pass
+        return self._scheduler.take_next()
 
-        with self._latest_lock:
-            packet = self._latest_best_effort
-            self._latest_best_effort = None
-            return packet
+    @property
+    def queue_drops(self) -> int:
+        return self._scheduler.stats.dropped_full
+
+    @property
+    def best_effort_replacements(self) -> int:
+        return self._scheduler.stats.replaced_latest
+
+    @property
+    def expired_count(self) -> int:
+        return self._scheduler.stats.expired
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -171,6 +239,7 @@ class RobotLink:
 
     def _run_connected(self, transport: Transport) -> None:
         while not self._stop_event.is_set():
+            self.reliable_sender.poll()
             packet = self._take_next_packet()
 
             if packet is not None:

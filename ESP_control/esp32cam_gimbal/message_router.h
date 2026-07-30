@@ -9,13 +9,16 @@ using MessageRouterSendCallback = bool (*)(
     size_t length
 );
 
+using MessageRouterClockCallback = uint32_t (*)();
+
 
 /*
  * Bind the two outgoing links. The router owns neither transport.
  */
 void messageRouterInit(
     MessageRouterSendCallback networkSend,
-    MessageRouterSendCallback stm32Send
+    MessageRouterSendCallback stm32Send,
+    MessageRouterClockCallback clockNow = nullptr
 );
 
 

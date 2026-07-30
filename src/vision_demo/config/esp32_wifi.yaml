@@ -13,6 +13,9 @@ color_tracker_node:
 robot_link_node:
   ros__parameters:
     websocket_url: "ws://192.168.1.100/ws"
+    # Empty means: derive the TCP host from websocket_url.
+    tcp_host: ""
+    tcp_port: 9000
     reconnect_delay_sec: 1.0
     send_queue_size: 8
     command_topic: "/robot_link/tx"

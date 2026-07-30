@@ -3,17 +3,20 @@
 
 import rclpy
 from rclpy.node import Node
+from urllib.parse import urlparse
 
 from std_msgs.msg import UInt8MultiArray
 
 from vision_demo.protocol_v1 import (
     ApplicationMessage,
-    MessageFlag,
     ProtocolError,
     ServiceId,
     SystemOpcode,
 )
 from vision_demo.robot_link import RobotLink, SendPolicy
+from vision_demo.service_registry import QosClass, lookup_policy
+from vision_demo.transport.fallback import FallbackTransport
+from vision_demo.transport.tcp import TcpTransport
 from vision_demo.transport.websocket import WebSocketTransport
 
 
@@ -29,6 +32,8 @@ class RobotLinkNode(Node):
             'ws://192.168.1.100/ws',
         )
         self.declare_parameter('reconnect_delay_sec', 1.0)
+        self.declare_parameter('tcp_host', '')
+        self.declare_parameter('tcp_port', 9000)
         self.declare_parameter('send_queue_size', 8)
         self.declare_parameter(
             'command_topic',
@@ -45,6 +50,21 @@ class RobotLinkNode(Node):
         reconnect_delay_sec = float(
             self.get_parameter('reconnect_delay_sec').value
         )
+        configured_tcp_host = str(
+            self.get_parameter('tcp_host').value
+        ).strip()
+        tcp_host = (
+            configured_tcp_host
+            or urlparse(websocket_url).hostname
+        )
+        tcp_port = int(
+            self.get_parameter('tcp_port').value
+        )
+
+        if not tcp_host:
+            raise ValueError(
+                'tcp_host is empty and websocket_url has no host'
+            )
         send_queue_size = int(
             self.get_parameter('send_queue_size').value
         )
@@ -68,8 +88,14 @@ class RobotLinkNode(Node):
         )
 
         self.link = RobotLink(
-            transport_factory=lambda: WebSocketTransport(
-                websocket_url,
+            transport_factory=lambda: FallbackTransport(
+                primary_factory=lambda: WebSocketTransport(
+                    websocket_url,
+                ),
+                fallback_factory=lambda: TcpTransport(
+                    tcp_host,
+                    tcp_port,
+                ),
             ),
             reconnect_delay_sec=reconnect_delay_sec,
             queue_size=send_queue_size,
@@ -83,7 +109,8 @@ class RobotLinkNode(Node):
         self.link.start()
 
         self.get_logger().info(
-            f'RobotLink started: {websocket_url}; '
+            f'RobotLink started: primary={websocket_url}, '
+            f'fallback=tcp://{tcp_host}:{tcp_port}; '
             f'tx={command_topic}, rx={receive_topic}, '
             f'queue={send_queue_size}'
         )
@@ -98,10 +125,36 @@ class RobotLinkNode(Node):
             )
             return
 
-        policy = SendPolicy.FIFO
+        message_policy = lookup_policy(
+            message.service,
+            message.opcode,
+        )
 
-        if message.flags & int(MessageFlag.REALTIME):
-            policy = SendPolicy.BEST_EFFORT
+        if message_policy is None:
+            self.get_logger().warning(
+                'Rejected unregistered outbound service/opcode'
+            )
+            return
+
+        if message_policy.qos is QosClass.RELIABLE:
+            request_key = self.link.send_reliable(
+                dst=message.dst,
+                service=message.service,
+                opcode=message.opcode,
+                payload=message.payload,
+            )
+
+            if request_key is None:
+                self.get_logger().warning(
+                    'RobotLink reliable table or outbound FIFO is full'
+                )
+            return
+
+        policy = (
+            SendPolicy.BEST_EFFORT_LATEST
+            if message_policy.qos is QosClass.BEST_EFFORT
+            else SendPolicy.BULK
+        )
 
         if not self.link.send_packet(packet, policy):
             self.get_logger().warning(

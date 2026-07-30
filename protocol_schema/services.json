@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "qos": {
+    "BEST_EFFORT": 0,
+    "RELIABLE": 1,
+    "BULK": 2
+  },
+  "priority": {
+    "BULK": 0,
+    "NORMAL": 1,
+    "HIGH": 2,
+    "EMERGENCY": 3
+  },
+  "overflow": {
+    "DROP_OLD": 0,
+    "REJECT_NEW": 1,
+    "PAUSE": 2
+  },
+  "services": [
+    {
+      "name": "SYSTEM",
+      "id": 1,
+      "opcodes": [
+        {"name": "PING", "id": 1, "qos": "RELIABLE", "priority": "HIGH", "deadline_ms": 1000, "overflow": "REJECT_NEW"},
+        {"name": "PONG", "id": 2, "qos": "BEST_EFFORT", "priority": "NORMAL", "deadline_ms": 1000, "overflow": "DROP_OLD"},
+        {"name": "RESET", "id": 3, "qos": "RELIABLE", "priority": "EMERGENCY", "deadline_ms": 1000, "overflow": "REJECT_NEW"}
+      ]
+    },
+    {
+      "name": "MOTION",
+      "id": 16,
+      "opcodes": [
+        {"name": "MOVE", "id": 1, "qos": "BEST_EFFORT", "priority": "HIGH", "deadline_ms": 100, "overflow": "DROP_OLD"},
+        {"name": "STOP", "id": 2, "qos": "RELIABLE", "priority": "EMERGENCY", "deadline_ms": 250, "overflow": "REJECT_NEW"},
+        {"name": "CENTER", "id": 3, "qos": "RELIABLE", "priority": "HIGH", "deadline_ms": 500, "overflow": "REJECT_NEW"},
+        {"name": "ESTOP", "id": 4, "qos": "RELIABLE", "priority": "EMERGENCY", "deadline_ms": 100, "overflow": "REJECT_NEW"},
+        {"name": "CLEAR_ESTOP", "id": 5, "qos": "RELIABLE", "priority": "HIGH", "deadline_ms": 500, "overflow": "REJECT_NEW"},
+        {"name": "STATE", "id": 16, "qos": "BEST_EFFORT", "priority": "NORMAL", "deadline_ms": 200, "overflow": "DROP_OLD"}
+      ]
+    },
+    {
+      "name": "TELEMETRY",
+      "id": 32,
+      "opcodes": [
+        {"name": "DATA", "id": 1, "qos": "BEST_EFFORT", "priority": "NORMAL", "deadline_ms": 500, "overflow": "DROP_OLD"},
+        {"name": "BATCH", "id": 2, "qos": "BEST_EFFORT", "priority": "NORMAL", "deadline_ms": 100, "overflow": "DROP_OLD"},
+        {"name": "SAMPLE_BLOCK", "id": 3, "qos": "BEST_EFFORT", "priority": "HIGH", "deadline_ms": 50, "overflow": "DROP_OLD"}
+      ]
+    },
+    {
+      "name": "CONFIG",
+      "id": 48,
+      "opcodes": [
+        {"name": "GET", "id": 1, "qos": "RELIABLE", "priority": "NORMAL", "deadline_ms": 1000, "overflow": "REJECT_NEW"},
+        {"name": "SET", "id": 2, "qos": "RELIABLE", "priority": "HIGH", "deadline_ms": 1000, "overflow": "REJECT_NEW"}
+      ]
+    },
+    {
+      "name": "EVENT",
+      "id": 64,
+      "opcodes": [
+        {"name": "REPORT", "id": 1, "qos": "RELIABLE", "priority": "EMERGENCY", "deadline_ms": 1000, "overflow": "REJECT_NEW"}
+      ]
+    },
+    {
+      "name": "OTA",
+      "id": 80,
+      "opcodes": [
+        {"name": "START", "id": 1, "qos": "RELIABLE", "priority": "HIGH", "deadline_ms": 2000, "overflow": "REJECT_NEW"},
+        {"name": "CHUNK", "id": 2, "qos": "BULK", "priority": "BULK", "deadline_ms": 5000, "overflow": "PAUSE"},
+        {"name": "FINISH", "id": 3, "qos": "RELIABLE", "priority": "HIGH", "deadline_ms": 5000, "overflow": "REJECT_NEW"},
+        {"name": "ABORT", "id": 4, "qos": "RELIABLE", "priority": "EMERGENCY", "deadline_ms": 1000, "overflow": "REJECT_NEW"}
+      ]
+    },
+    {
+      "name": "SENSOR",
+      "id": 96,
+      "opcodes": [
+        {"name": "LIST", "id": 1, "qos": "RELIABLE", "priority": "NORMAL", "deadline_ms": 1000, "overflow": "REJECT_NEW"},
+        {"name": "INFO", "id": 2, "qos": "RELIABLE", "priority": "NORMAL", "deadline_ms": 1000, "overflow": "REJECT_NEW"},
+        {"name": "CONFIG", "id": 3, "qos": "RELIABLE", "priority": "HIGH", "deadline_ms": 1000, "overflow": "REJECT_NEW"},
+        {"name": "START", "id": 4, "qos": "RELIABLE", "priority": "HIGH", "deadline_ms": 1000, "overflow": "REJECT_NEW"},
+        {"name": "STOP", "id": 5, "qos": "RELIABLE", "priority": "HIGH", "deadline_ms": 1000, "overflow": "REJECT_NEW"},
+        {"name": "DATA", "id": 6, "qos": "BEST_EFFORT", "priority": "NORMAL", "deadline_ms": 500, "overflow": "DROP_OLD"},
+        {"name": "STATUS", "id": 7, "qos": "BEST_EFFORT", "priority": "HIGH", "deadline_ms": 1000, "overflow": "DROP_OLD"}
+      ]
+    }
+  ]
+}

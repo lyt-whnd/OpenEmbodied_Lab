@@ -20,6 +20,7 @@ def _valid_document():
         'ip': '10.0.0.99',
         'ws_port': 80,
         'ws_path': '/ws',
+        'tcp_port': 9000,
         'stream_port': 81,
         'stream_path': '/stream',
     }
@@ -44,6 +45,21 @@ def test_valid_datagram_builds_endpoints_from_udp_source():
     assert robot.stream_url == (
         'http://192.168.103.42:81/stream'
     )
+    assert robot.tcp_url == (
+        'tcp://192.168.103.42:9000'
+    )
+
+
+def test_legacy_discovery_defaults_tcp_port():
+    document = _valid_document()
+    del document['tcp_port']
+
+    robot = parse_discovery_datagram(
+        _encode(document),
+        ('192.168.103.42', 50999),
+    )
+
+    assert robot.tcp_port == 9000
 
 
 @pytest.mark.parametrize(
@@ -52,6 +68,7 @@ def test_valid_datagram_builds_endpoints_from_udp_source():
         ('magic', 'OTHER_DEVICE', 'magic'),
         ('proto', 2, 'protocol version'),
         ('ws_port', 0, 'ws_port'),
+        ('tcp_port', 0, 'tcp_port'),
         ('stream_port', 70000, 'stream_port'),
         ('ws_path', 'ws', 'ws_path'),
         ('stream_path', '/bad path', 'stream_path'),

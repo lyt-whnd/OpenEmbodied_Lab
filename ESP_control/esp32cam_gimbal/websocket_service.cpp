@@ -6,6 +6,7 @@
 #include "network_tx_queue.h"
 #include "protocol_v1.h"
 #include "stm32_uart.h"
+#include "tcp_transport.h"
 #include "transport_limits.h"
 #include "websocket_transport.h"
 
@@ -31,6 +32,11 @@ bool enqueueNetworkMessage(
     );
 }
 
+uint32_t routerClockMs()
+{
+    return millis();
+}
+
 
 void receiveNetworkMessage(
     const uint8_t *data,
@@ -45,10 +51,60 @@ void receiveNetworkMessage(
     )
     {
         Serial.println(
-            "WebSocket V1 message was rejected "
+            "Network V1 message was rejected "
             "or unsupported"
         );
     }
+}
+
+
+void receiveTcpMessage(
+    const uint8_t *data,
+    size_t length
+)
+{
+    /*
+     * WebSocket remains authoritative when both clients are connected.
+     * TCP is a fallback, not a second simultaneous controller.
+     */
+    if (websocketTransportHasClient())
+    {
+        return;
+    }
+
+    receiveNetworkMessage(
+        data,
+        length
+    );
+}
+
+
+bool networkTransportHasClient()
+{
+    return (
+        websocketTransportHasClient() ||
+        tcpTransportHasClient()
+    );
+}
+
+
+bool networkTransportSend(
+    const uint8_t *data,
+    size_t length
+)
+{
+    if (
+        websocketTransportHasClient() &&
+        websocketTransportSend(data, length)
+    )
+    {
+        return true;
+    }
+
+    return tcpTransportSend(
+        data,
+        length
+    );
 }
 
 
@@ -79,31 +135,42 @@ bool websocketServiceRegister(
 )
 {
     networkTxInit(
-        websocketTransportSend,
-        websocketTransportHasClient
+        networkTransportSend,
+        networkTransportHasClient,
+        routerClockMs
     );
     messageRouterInit(
         enqueueNetworkMessage,
-        stm32TransportSend
+        stm32TransportSend,
+        routerClockMs
     );
     websocketTransportSetReceiveCallback(
         receiveNetworkMessage
+    );
+    tcpTransportSetReceiveCallback(
+        receiveTcpMessage
     );
     stm32TransportSetReceiveCallback(
         receiveStm32Message
     );
 
-    return websocketTransportRegister(server);
+    const bool tcpReady =
+        tcpTransportBegin();
+    const bool websocketReady =
+        websocketTransportRegister(server);
+
+    return tcpReady || websocketReady;
 }
 
 
 bool websocketServiceHasClient()
 {
-    return websocketTransportHasClient();
+    return networkTransportHasClient();
 }
 
 
 void websocketServicePoll()
 {
+    tcpTransportPoll();
     networkTxPoll();
 }

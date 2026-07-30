@@ -58,9 +58,17 @@ def generate_launch_description():
         parameters=[config_file],
     )
 
+    sensor_bridge_node = Node(
+        package='vision_demo',
+        executable='sensor_bridge',
+        name='sensor_bridge_node',
+        output='screen',
+    )
+
     return LaunchDescription([
         esp32_camera_node,
         color_tracker_node,
         robot_link_node,
+        sensor_bridge_node,
         websocket_control_node,
     ])

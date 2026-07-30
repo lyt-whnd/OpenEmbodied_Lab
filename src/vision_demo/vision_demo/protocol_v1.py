@@ -53,6 +53,7 @@ class ServiceId(IntEnum):
     CONFIG = 0x30
     EVENT = 0x40
     OTA = 0x50
+    SENSOR = 0x60
 
 
 class SystemOpcode(IntEnum):
@@ -60,6 +61,7 @@ class SystemOpcode(IntEnum):
 
     PING = 0x01
     PONG = 0x02
+    RESET = 0x03
 
 
 class MotionOpcode(IntEnum):
@@ -71,6 +73,68 @@ class MotionOpcode(IntEnum):
     ESTOP = 0x04
     CLEAR_ESTOP = 0x05
     STATE = 0x10
+
+
+class TelemetryOpcode(IntEnum):
+    """Telemetry service operation identifiers."""
+
+    DATA = 0x01
+    BATCH = 0x02
+    SAMPLE_BLOCK = 0x03
+
+
+class ConfigOpcode(IntEnum):
+    """Configuration service operation identifiers."""
+
+    GET = 0x01
+    SET = 0x02
+
+
+class EventOpcode(IntEnum):
+    """Event service operation identifiers."""
+
+    REPORT = 0x01
+
+
+class OtaOpcode(IntEnum):
+    """OTA service operation identifiers."""
+
+    START = 0x01
+    CHUNK = 0x02
+    FINISH = 0x03
+    ABORT = 0x04
+
+
+class SensorOpcode(IntEnum):
+    """Generic sensor service operation identifiers."""
+
+    LIST = 0x01
+    INFO = 0x02
+    CONFIG = 0x03
+    START = 0x04
+    STOP = 0x05
+    DATA = 0x06
+    STATUS = 0x07
+
+
+class StatusCode(IntEnum):
+    """Common application result and error codes."""
+
+    OK = 0
+    BAD_VERSION = 1
+    BAD_LENGTH = 2
+    BAD_CRC = 3
+    UNKNOWN_SERVICE = 4
+    UNKNOWN_OPCODE = 5
+    WRONG_SESSION = 6
+    NOT_OWNER = 7
+    OLD_SEQUENCE = 8
+    ESTOP_ACTIVE = 9
+    OUT_OF_RANGE = 10
+    BUSY = 11
+    DEVICE_OFFLINE = 12
+    NOT_IMPLEMENTED = 13
+    REQUEST_ID_CONFLICT = 14
 
 
 def _validate_integer(

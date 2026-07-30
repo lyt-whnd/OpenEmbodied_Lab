@@ -36,8 +36,12 @@ def _required_string(
     return value
 
 
-def _required_port(document: dict, field: str) -> int:
-    value = document.get(field)
+def _required_port(
+    document: dict,
+    field: str,
+    default=None,
+) -> int:
+    value = document.get(field, default)
 
     if (
         isinstance(value, bool)
@@ -71,6 +75,7 @@ class DiscoveredRobot:
     ip: str
     ws_port: int
     ws_path: str
+    tcp_port: int
     stream_port: int
     stream_path: str
     proto: int = DISCOVERY_PROTOCOL_VERSION
@@ -88,10 +93,16 @@ class DiscoveredRobot:
             f'{self.stream_path}'
         )
 
+    @property
+    def tcp_url(self) -> str:
+        """Return the raw V1 TCP fallback endpoint."""
+        return f'tcp://{self.ip}:{self.tcp_port}'
+
     def as_output_dict(self) -> dict:
         """Return discovery fields plus ready-to-use endpoint URLs."""
         output = asdict(self)
         output['websocket_url'] = self.websocket_url
+        output['tcp_url'] = self.tcp_url
         output['stream_url'] = self.stream_url
         return output
 
@@ -142,6 +153,11 @@ def parse_discovery_datagram(
         ip=source_ip,
         ws_port=_required_port(document, 'ws_port'),
         ws_path=_required_path(document, 'ws_path'),
+        tcp_port=_required_port(
+            document,
+            'tcp_port',
+            9000,
+        ),
         stream_port=_required_port(
             document,
             'stream_port',

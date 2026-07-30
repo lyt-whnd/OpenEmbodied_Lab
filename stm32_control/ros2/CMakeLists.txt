@@ -16,6 +16,16 @@ set(CORE_SOURCES
     Core/Src/robot_dispatcher.c
     Core/Src/robot_motion.c
     Core/Src/robot_protocol.c
+    Core/Src/robot_reliable.c
+    Core/Src/robot_result_cache.c
+    Core/Src/robot_sample_block.c
+    Core/Src/robot_sensor_catalog.c
+    Core/Src/robot_sensor_registry.c
+    Core/Src/robot_sensor_service.c
+    Core/Src/robot_service_registry.c
+    Core/Src/robot_telemetry.c
+    Core/Src/robot_time.c
+    Core/Src/robot_tx_scheduler.c
     Core/Src/robot_transport_uart.c
     Core/Src/stm32f1xx_hal_msp.c
     Core/Src/stm32f1xx_it.c

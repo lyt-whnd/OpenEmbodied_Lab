@@ -18,13 +18,19 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
 #include "robot_dispatcher.h"
 #include "robot_motion.h"
+#include "robot_sample_block.h"
+#include "robot_sensor_catalog.h"
+#include "robot_service_registry.h"
+#include "robot_telemetry.h"
 #include "robot_transport.h"
+#include "robot_tx_scheduler.h"
 
 /* USER CODE END Includes */
 
@@ -53,6 +59,16 @@ UART_HandleTypeDef huart1;
 RobotMotionController robot_motion;
 RobotDispatcher robot_dispatcher;
 RobotTransport robot_transport;
+RobotSensorRegistry robot_sensor_registry;
+RobotTelemetryAggregator robot_telemetry;
+RobotTxScheduler robot_tx_scheduler;
+RobotSampleManager robot_sample_manager;
+uint8_t robot_telemetry_payload[
+    ROBOT_TELEMETRY_BATCH_MAX_BYTES
+];
+uint8_t robot_tx_message[
+    ROBOT_PROTOCOL_MAX_MESSAGE_SIZE
+];
 
 /* USER CODE END PV */
 
@@ -168,6 +184,160 @@ static uint32_t Robot_UART_Get_Time(
 }
 
 
+static void Robot_Enqueue_Telemetry_Payload(
+    uint8_t opcode,
+    const uint8_t *payload,
+    uint16_t payload_length,
+    uint32_t key,
+    uint32_t now_ms
+)
+{
+    uint16_t message_length = 0U;
+    const RobotMessagePolicy *policy;
+    RobotProtocolMessage message;
+
+    memset(&message, 0, sizeof(message));
+    message.version = ROBOT_PROTOCOL_VERSION;
+    message.flags = ROBOT_FLAG_REALTIME;
+    message.src = ROBOT_NODE_STM32;
+    message.dst = ROBOT_NODE_LINUX;
+    message.service = ROBOT_SERVICE_TELEMETRY;
+    message.opcode = opcode;
+    message.seq = RobotProtocol_NextSequence(
+        RobotDispatcher_GetProtocol(&robot_dispatcher)
+    );
+    message.payload_length = payload_length;
+    message.payload = payload;
+
+    policy = RobotServiceRegistry_Lookup(
+        message.service,
+        message.opcode
+    );
+    if (
+        policy != NULL &&
+        RobotProtocol_EncodeMessage(
+            &message,
+            robot_tx_message,
+            sizeof(robot_tx_message),
+            &message_length
+        )
+    )
+    {
+        (void)RobotTxScheduler_Enqueue(
+            &robot_tx_scheduler,
+            ROBOT_TX_BEST_EFFORT_LATEST,
+            policy,
+            key,
+            robot_tx_message,
+            message_length,
+            now_ms
+        );
+    }
+}
+
+
+static void Robot_Queue_Telemetry(uint32_t now_ms)
+{
+    uint16_t payload_length = 0U;
+
+    (void)RobotTelemetry_PollRegistry(
+        &robot_telemetry,
+        &robot_sensor_registry,
+        now_ms
+    );
+    (void)RobotSampleManager_Poll(
+        &robot_sample_manager,
+        &robot_sensor_registry,
+        now_ms
+    );
+
+    if (RobotTelemetry_BuildBatch(
+        &robot_telemetry,
+        now_ms,
+        false,
+        robot_telemetry_payload,
+        sizeof(robot_telemetry_payload),
+        &payload_length
+    ))
+    {
+        Robot_Enqueue_Telemetry_Payload(
+            ROBOT_TELEMETRY_BATCH,
+            robot_telemetry_payload,
+            payload_length,
+            (
+                ((uint32_t)ROBOT_SERVICE_TELEMETRY << 8U) |
+                ROBOT_TELEMETRY_BATCH
+            ),
+            now_ms
+        );
+    }
+
+    if (RobotSampleManager_BuildNext(
+        &robot_sample_manager,
+        now_ms,
+        false,
+        robot_telemetry_payload,
+        sizeof(robot_telemetry_payload),
+        &payload_length
+    ))
+    {
+        const uint32_t sensor_key = (
+            (uint32_t)robot_telemetry_payload[0] |
+            ((uint32_t)robot_telemetry_payload[1] << 8U) |
+            ((uint32_t)robot_telemetry_payload[2] << 16U)
+        );
+        Robot_Enqueue_Telemetry_Payload(
+            ROBOT_TELEMETRY_SAMPLE_BLOCK,
+            robot_telemetry_payload,
+            payload_length,
+            (
+                ((uint32_t)ROBOT_TELEMETRY_SAMPLE_BLOCK << 24U) |
+                sensor_key
+            ),
+            now_ms
+        );
+    }
+}
+
+
+static void Robot_Drain_Tx(uint32_t now_ms)
+{
+    uint16_t message_length = 0U;
+    RobotProtocolMessage message;
+    RobotProtocolContext *protocol =
+        RobotDispatcher_GetProtocol(&robot_dispatcher);
+
+    if (
+        !RobotTxScheduler_TakeNext(
+            &robot_tx_scheduler,
+            now_ms,
+            robot_tx_message,
+            sizeof(robot_tx_message),
+            &message_length
+        ) ||
+        RobotProtocol_DecodeMessage(
+            robot_tx_message,
+            message_length,
+            &message
+        ) != ROBOT_DECODE_OK
+    )
+    {
+        return;
+    }
+
+    (void)RobotProtocol_SendMessage(
+        protocol,
+        message.flags,
+        message.dst,
+        message.service,
+        message.opcode,
+        message.seq,
+        message.payload,
+        message.payload_length
+    );
+}
+
+
 
 /* USER CODE END 0 */
 
@@ -232,6 +402,26 @@ RobotDispatcher_Init(
     HAL_GetTick()
 );
 
+if (!RobotSensorCatalog_Init(&robot_sensor_registry))
+{
+    Error_Handler();
+}
+
+RobotDispatcher_SetSensorRegistry(
+    &robot_dispatcher,
+    &robot_sensor_registry
+);
+
+RobotTelemetry_Init(&robot_telemetry, HAL_GetTick());
+RobotTxScheduler_Init(&robot_tx_scheduler);
+if (!RobotSampleManager_Init(
+    &robot_sample_manager,
+    &robot_sensor_registry
+))
+{
+    Error_Handler();
+}
+
 robot_transport.protocol =
     RobotDispatcher_GetProtocol(
         &robot_dispatcher
@@ -264,6 +454,8 @@ if (!RobotTransport_StartRx(&robot_transport))
     (void)RobotTransport_Poll(
         &robot_transport
     );
+    Robot_Queue_Telemetry(now_ms);
+    Robot_Drain_Tx(now_ms);
 
     RobotMotion_Process(
         &robot_motion,

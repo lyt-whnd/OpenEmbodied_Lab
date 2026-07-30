@@ -15,6 +15,17 @@ from vision_demo.protocol_v1 import (
     ServiceId,
     SystemOpcode,
 )
+from vision_demo.reliable_sender import ReliableSender
+
+
+class FakeClock:
+    """Deterministic clock used to trigger reliable retries."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
 
 
 def motion_message(seq: int) -> ApplicationMessage:
@@ -66,8 +77,8 @@ def test_oversized_frame_recovers_at_next_delimiter() -> None:
     assert node.uart.rejected_frames == 1
 
 
-def test_current_v1_drop_has_no_retry() -> None:
-    """Record that current V1 does not recover a dropped frame."""
+def test_best_effort_drop_has_no_retry() -> None:
+    """A BEST_EFFORT message intentionally has no recovery."""
     rig = ThreeNodeRig()
     rig.linux_send(motion_message(15))
     rig.stm32_wire_chunks.clear()
@@ -75,8 +86,8 @@ def test_current_v1_drop_has_no_retry() -> None:
     assert rig.stm32.received == []
 
 
-def test_current_v1_duplicate_is_executed_twice() -> None:
-    """Record the current lack of request-ID duplicate suppression."""
+def test_best_effort_duplicate_is_executed_twice() -> None:
+    """BEST_EFFORT does not spend cache memory on duplicate suppression."""
     node = Stm32Node(lambda _: None)
     wire = encode_uart_frame(motion_message(16).encode())
     node.input_wire(wire + wire)
@@ -107,3 +118,40 @@ def test_linux_can_directly_use_same_uart_v1_packet() -> None:
     packet = motion_message(18).encode()
     node.input_wire(encode_uart_frame(packet))
     assert node.received[0].encode() == packet
+
+
+def test_reliable_ack_loss_retries_without_duplicate_execution() -> None:
+    """Dropped results cause retry; STM32 returns cache without re-execute."""
+    rig = ThreeNodeRig()
+    clock = FakeClock()
+    sender = ReliableSender(
+        lambda packet: (
+            rig.esp32.input_linux_packet(packet) is None
+        ),
+        epoch=55,
+        clock=clock,
+        retry_timeout_sec=0.1,
+        max_retries=2,
+    )
+    sender.send(
+        dst=NodeId.STM32,
+        service=ServiceId.MOTION,
+        opcode=MotionOpcode.STOP,
+    )
+
+    rig.flush_linux_to_stm32()
+    assert rig.stm32.execution_count == 1
+    assert len(rig.linux_received) == 2
+
+    # Simulate loss by deliberately not delivering these results to sender.
+    clock.now = 0.11
+    sender.poll()
+    rig.flush_linux_to_stm32()
+
+    assert rig.stm32.execution_count == 1
+    assert len(rig.linux_received) == 3
+
+    final = rig.linux_received[-1]
+    sender.handle_message(final, final.encode())
+    assert sender.retry_manager.pending_count == 0
+    assert sender.retry_manager.retry_count == 1

@@ -10,6 +10,8 @@ extern "C" {
 
 #include "robot_motion.h"
 #include "robot_protocol.h"
+#include "robot_result_cache.h"
+#include "robot_sensor_service.h"
 
 
 typedef struct
@@ -20,10 +22,14 @@ typedef struct
     RobotProtocolTransmitHandler transmit_handler;
     void *transport_context;
     uint32_t current_time_ms;
+    RobotResultCache result_cache;
+    RobotSensorService sensor_service;
 
     uint32_t dispatched_message_count;
     uint32_t unsupported_service_count;
     uint32_t response_error_count;
+    uint32_t duplicate_request_count;
+    uint32_t invalid_reliable_count;
 } RobotDispatcher;
 
 
@@ -39,6 +45,11 @@ void RobotDispatcher_Init(
 void RobotDispatcher_SetTime(
     RobotDispatcher *dispatcher,
     uint32_t now_ms
+);
+
+void RobotDispatcher_SetSensorRegistry(
+    RobotDispatcher *dispatcher,
+    RobotSensorRegistry *registry
 );
 
 

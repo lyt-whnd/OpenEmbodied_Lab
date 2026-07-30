@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from vision_demo.protocol_v1 import (
@@ -14,6 +14,12 @@ from vision_demo.protocol_v1 import (
     ServiceId,
     SystemOpcode,
 )
+from vision_demo.reliable_protocol import (
+    ReliableRequest,
+    ReliableResult,
+    ResultStage,
+)
+from vision_demo.service_registry import QosClass, lookup_policy
 
 
 CRC_SIZE = 2
@@ -155,6 +161,7 @@ class Stm32Node:
     def __post_init__(self) -> None:
         """Create the STM32 UART stream receiver."""
         self.uart = UartStreamReceiver(self._on_packet)
+        self.result_cache = {}
 
     def _on_packet(self, packet: bytes) -> None:
         message = ApplicationMessage.decode(packet)
@@ -162,6 +169,54 @@ class Stm32Node:
             return
         if message.dst not in (NodeId.STM32, NodeId.BROADCAST):
             return
+
+        policy = lookup_policy(message.service, message.opcode)
+        is_reliable_request = (
+            policy is not None
+            and policy.qos is QosClass.RELIABLE
+            and bool(message.flags & MessageFlag.ACK_REQUIRED)
+            and not bool(message.flags & MessageFlag.RESPONSE)
+        )
+
+        if is_reliable_request:
+            request = ReliableRequest.decode(message.payload)
+            key = (
+                message.src,
+                request.epoch,
+                request.request_id,
+            )
+            cached = self.result_cache.get(key)
+
+            if cached is not None:
+                self._send_result(message, request, cached)
+                return
+
+            self._send_result(
+                message,
+                request,
+                ReliableResult(
+                    epoch=request.epoch,
+                    request_id=request.request_id,
+                    stage=ResultStage.RECEIVED,
+                    status=0,
+                ),
+            )
+            message = replace(
+                message,
+                payload=request.payload,
+            )
+            applied = ReliableResult(
+                epoch=request.epoch,
+                request_id=request.request_id,
+                stage=ResultStage.APPLIED,
+                status=0,
+            )
+            self.result_cache[key] = applied
+            self.received.append(message)
+            self.execution_count += 1
+            self._send_result(message, request, applied)
+            return
+
         self.received.append(message)
         self.execution_count += 1
 
@@ -172,6 +227,30 @@ class Stm32Node:
     def send_message(self, message: ApplicationMessage) -> None:
         """Send one STM32-originated message over UART."""
         self.send_wire(encode_uart_frame(message.encode()))
+
+    def _send_result(
+        self,
+        request_message: ApplicationMessage,
+        _request: ReliableRequest,
+        result: ReliableResult,
+    ) -> None:
+        """Return one generic reliable stage through the UART gateway."""
+        flags = MessageFlag.RESPONSE
+
+        if result.stage is ResultStage.FAILED:
+            flags |= MessageFlag.ERROR
+
+        self.send_message(
+            ApplicationMessage(
+                flags=int(flags),
+                src=int(NodeId.STM32),
+                dst=request_message.src,
+                service=request_message.service,
+                opcode=request_message.opcode,
+                seq=request_message.seq,
+                payload=result.encode(),
+            )
+        )
 
 
 @dataclass

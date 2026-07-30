@@ -1,7 +1,6 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
 #include <iostream>
 #include <vector>
@@ -15,6 +14,7 @@ namespace
 
 bool ready = true;
 bool failSend = false;
+uint32_t nowMs = 0U;
 std::vector<std::vector<uint8_t>> sentMessages;
 
 
@@ -24,21 +24,51 @@ bool transportReady()
 }
 
 
-bool captureSend(
-    const uint8_t *data,
-    size_t length
-)
+uint32_t clockNow()
+{
+    return nowMs;
+}
+
+
+bool captureSend(const uint8_t *data, size_t length)
 {
     if (failSend)
     {
         return false;
     }
-
-    sentMessages.emplace_back(
-        data,
-        data + length
-    );
+    sentMessages.emplace_back(data, data + length);
     return true;
+}
+
+
+std::vector<uint8_t> makeMessage(
+    uint8_t service,
+    uint8_t opcode,
+    uint16_t sequence
+)
+{
+    ProtocolV1::MessageView message = {};
+    message.version = ProtocolV1::VERSION;
+    message.src = ProtocolV1::NODE_STM32;
+    message.dst = ProtocolV1::NODE_LINUX;
+    message.service = service;
+    message.opcode = opcode;
+    message.seq = sequence;
+
+    std::vector<uint8_t> result(
+        ProtocolV1::MAX_MESSAGE_SIZE
+    );
+    size_t length = 0U;
+    assert(
+        ProtocolV1::encodeMessage(
+            message,
+            result.data(),
+            result.size(),
+            length
+        )
+    );
+    result.resize(length);
+    return result;
 }
 
 
@@ -46,172 +76,144 @@ void resetHarness()
 {
     ready = true;
     failSend = false;
+    nowMs = 0U;
     sentMessages.clear();
-
-    networkTxInit(
-        captureSend,
-        transportReady
-    );
+    networkTxInit(captureSend, transportReady, clockNow);
 }
 
 
-void pollUntilEmpty()
+void testBulkBacklogNeverDelaysStop()
 {
-    while (networkTxPendingCount() > 0U)
+    resetHarness();
+    const auto bulk1 = makeMessage(
+        ProtocolV1::SERVICE_OTA,
+        ProtocolV1::OTA_CHUNK,
+        1U
+    );
+    const auto bulk2 = makeMessage(
+        ProtocolV1::SERVICE_OTA,
+        ProtocolV1::OTA_CHUNK,
+        2U
+    );
+    const auto bulk3 = makeMessage(
+        ProtocolV1::SERVICE_OTA,
+        ProtocolV1::OTA_CHUNK,
+        3U
+    );
+    const auto stop = makeMessage(
+        ProtocolV1::SERVICE_MOTION,
+        ProtocolV1::MOTION_STOP,
+        4U
+    );
+
+    assert(networkTxEnqueue(bulk1.data(), bulk1.size()));
+    assert(networkTxEnqueue(bulk2.data(), bulk2.size()));
+    assert(!networkTxEnqueue(bulk3.data(), bulk3.size()));
+    assert(networkTxEnqueue(stop.data(), stop.size()));
+
+    networkTxPoll();
+    assert(sentMessages.size() == 1U);
+    assert(sentMessages[0][4] == ProtocolV1::SERVICE_MOTION);
+    assert(sentMessages[0][5] == ProtocolV1::MOTION_STOP);
+}
+
+
+void testLatestReplacementAndSampleRing()
+{
+    resetHarness();
+    for (uint16_t sequence = 0U; sequence < 6U; ++sequence)
     {
-        networkTxPoll();
+        const auto latest = makeMessage(
+            ProtocolV1::SERVICE_TELEMETRY,
+            ProtocolV1::TELEMETRY_DATA,
+            sequence
+        );
+        assert(networkTxEnqueue(latest.data(), latest.size()));
     }
+
+    assert(networkTxPendingCount() == 1U);
+    NetworkTxStats stats = networkTxGetStats();
+    assert(stats.replacedLatest == 5U);
+
+    for (
+        uint16_t sequence = 0U;
+        sequence < NETWORK_TX_SAMPLE_SLOTS + 2U;
+        ++sequence
+    )
+    {
+        const auto sample = makeMessage(
+            ProtocolV1::SERVICE_TELEMETRY,
+            ProtocolV1::TELEMETRY_DATA,
+            sequence
+        );
+        assert(
+            networkTxEnqueue(
+                sample.data(),
+                sample.size(),
+                NetworkTxClass::BEST_EFFORT_SAMPLE
+            )
+        );
+    }
+
+    stats = networkTxGetStats();
+    assert(stats.droppedSample == 2U);
 }
 
 
-void testCopyOwnershipFifoAndFullPolicy()
+void testExpiredMessageIsNotSent()
 {
     resetHarness();
-
-    uint8_t first[] = {0x01U, 0x02U};
-    const uint8_t second[] = {0x03U};
-    const uint8_t third[] = {0x04U, 0x05U};
-    const uint8_t fourth[] = {0x06U};
-
-    assert(
-        networkTxEnqueue(first, sizeof(first))
-    );
-    assert(
-        networkTxEnqueue(second, sizeof(second))
-    );
-    assert(
-        networkTxEnqueue(third, sizeof(third))
-    );
-    assert(
-        !networkTxEnqueue(fourth, sizeof(fourth))
-    );
-
-    first[0] = 0xEEU;
-    pollUntilEmpty();
-
-    assert(sentMessages.size() == 3U);
-    assert(sentMessages[0][0] == 0x01U);
-    assert(sentMessages[1][0] == 0x03U);
-    assert(sentMessages[2][0] == 0x04U);
-
-    const NetworkTxStats stats =
-        networkTxGetStats();
-
-    assert(stats.enqueued == 3U);
-    assert(stats.sent == 3U);
-    assert(stats.droppedFull == 1U);
-    assert(stats.droppedOffline == 0U);
-}
-
-
-void testRapidPongAndStm32ForwardCopies()
-{
-    resetHarness();
-
-    uint8_t pong[] = {
-        0x01U, 0x02U, 0x02U, 0x01U,
-        0x01U, 0x02U, 0x09U, 0x00U,
-        0x00U, 0x00U
-    };
-    uint8_t forwarded[] = {
-        0x01U, 0x08U, 0x03U, 0x01U,
-        0x20U, 0x01U, 0x0AU, 0x00U,
-        0x01U, 0x00U, 0x5AU
-    };
-
-    assert(
-        networkTxEnqueue(
-            pong,
-            sizeof(pong)
-        )
+    const auto telemetry = makeMessage(
+        ProtocolV1::SERVICE_TELEMETRY,
+        ProtocolV1::TELEMETRY_DATA,
+        7U
     );
     assert(
         networkTxEnqueue(
-            forwarded,
-            sizeof(forwarded)
+            telemetry.data(),
+            telemetry.size()
         )
     );
 
-    memset(pong, 0xCC, sizeof(pong));
-    memset(forwarded, 0xDD, sizeof(forwarded));
+    nowMs = 501U;
+    networkTxPoll();
 
-    pollUntilEmpty();
-
-    assert(sentMessages.size() == 2U);
-    assert(sentMessages[0][0] == 0x01U);
-    assert(sentMessages[0][5] == 0x02U);
-    assert(sentMessages[1][2] == 0x03U);
-    assert(sentMessages[1][10] == 0x5AU);
+    assert(sentMessages.empty());
+    assert(networkTxPendingCount() == 0U);
+    assert(networkTxGetStats().expired == 1U);
 }
 
 
 void testOfflineAndSendFailureReleaseSlots()
 {
     resetHarness();
-
-    const uint8_t message[] = {0x11U};
-
-    assert(
-        networkTxEnqueue(
-            message,
-            sizeof(message)
-        )
+    const auto stop = makeMessage(
+        ProtocolV1::SERVICE_MOTION,
+        ProtocolV1::MOTION_STOP,
+        8U
     );
-    assert(
-        networkTxEnqueue(
-            message,
-            sizeof(message)
-        )
-    );
-
+    assert(networkTxEnqueue(stop.data(), stop.size()));
     ready = false;
     networkTxPoll();
-
     assert(networkTxPendingCount() == 0U);
-
-    NetworkTxStats stats = networkTxGetStats();
-    assert(stats.droppedOffline == 2U);
+    assert(networkTxGetStats().droppedOffline == 1U);
 
     ready = true;
     failSend = true;
-
-    assert(
-        networkTxEnqueue(
-            message,
-            sizeof(message)
-        )
-    );
+    assert(networkTxEnqueue(stop.data(), stop.size()));
     networkTxPoll();
-
-    assert(networkTxPendingCount() == 0U);
-
-    stats = networkTxGetStats();
-    assert(stats.sendFailures == 1U);
+    assert(networkTxGetStats().sendFailures == 1U);
 }
 
 
 void testInvalidInputs()
 {
     resetHarness();
-
-    uint8_t oversized[
-        ProtocolV1::MAX_MESSAGE_SIZE + 1U
-    ] = {};
-
+    uint8_t invalid[] = {0x01U};
     assert(!networkTxEnqueue(nullptr, 1U));
-    assert(!networkTxEnqueue(oversized, 0U));
-    assert(
-        !networkTxEnqueue(
-            oversized,
-            sizeof(oversized)
-        )
-    );
-
-    const NetworkTxStats stats =
-        networkTxGetStats();
-
-    assert(stats.rejected == 3U);
-    assert(networkTxPendingCount() == 0U);
+    assert(!networkTxEnqueue(invalid, 0U));
+    assert(!networkTxEnqueue(invalid, sizeof(invalid)));
+    assert(networkTxGetStats().rejected == 3U);
 }
 
 }
@@ -219,14 +221,11 @@ void testInvalidInputs()
 
 int main()
 {
-    testCopyOwnershipFifoAndFullPolicy();
-    testRapidPongAndStm32ForwardCopies();
+    testBulkBacklogNeverDelaysStop();
+    testLatestReplacementAndSampleRing();
+    testExpiredMessageIsNotSent();
     testOfflineAndSendFailureReleaseSlots();
     testInvalidInputs();
-
-    std::cout
-        << "Network TX queue host tests passed"
-        << std::endl;
-
+    std::cout << "Network TX scheduler host tests passed\n";
     return 0;
 }
