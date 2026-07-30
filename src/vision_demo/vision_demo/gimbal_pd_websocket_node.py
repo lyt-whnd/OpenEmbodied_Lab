@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""ROS 2 PD controller using the robot V1 binary WebSocket protocol."""
+"""ROS 2 PD controller publishing commands to the shared RobotLink."""
 
-import queue
-import threading
 import time
 
 from geometry_msgs.msg import Point
 
 import rclpy
 from rclpy.node import Node
+
+from std_msgs.msg import UInt8MultiArray
 
 from vision_demo.protocol_v1 import (
     ApplicationMessage,
@@ -20,19 +20,17 @@ from vision_demo.protocol_v1 import (
     ServiceId,
 )
 
-import websocket
-
 
 class GimbalPDWebSocketNode(Node):
     """
-    Send PD motion output using binary V1 application messages.
+    Publish PD motion output as binary V1 application messages.
 
     The current controller fills the head-rate fields and leaves the tracked
     base velocity fields at zero.
     """
 
     def __init__(self):
-        """Initialize parameters, ROS callbacks, and the socket worker."""
+        """Initialize parameters, ROS callbacks, and command publishing."""
         super().__init__(
             'gimbal_pd_websocket_node'
         )
@@ -41,10 +39,7 @@ class GimbalPDWebSocketNode(Node):
             'target_topic',
             '/target_position',
         )
-        self.declare_parameter(
-            'websocket_url',
-            'ws://192.168.1.100/ws',
-        )
+        self.declare_parameter('command_topic', '/robot_link/tx')
 
         self.declare_parameter(
             'control_hz',
@@ -82,16 +77,12 @@ class GimbalPDWebSocketNode(Node):
             0.5,
         )
         self.declare_parameter(
-            'reconnect_delay_sec',
-            2.0,
-        )
-        self.declare_parameter(
             'motion_valid_ms',
             300,
         )
         self.declare_parameter(
             'control_epoch',
-            1,
+            0,
         )
 
         self.target_topic = str(
@@ -99,10 +90,8 @@ class GimbalPDWebSocketNode(Node):
                 'target_topic'
             ).value
         )
-        self.websocket_url = str(
-            self.get_parameter(
-                'websocket_url'
-            ).value
+        self.command_topic = str(
+            self.get_parameter('command_topic').value
         )
 
         self.control_hz = float(
@@ -155,17 +144,12 @@ class GimbalPDWebSocketNode(Node):
                 'command_refresh_sec'
             ).value
         )
-        self.reconnect_delay_sec = float(
-            self.get_parameter(
-                'reconnect_delay_sec'
-            ).value
-        )
         self.motion_valid_ms = int(
             self.get_parameter(
                 'motion_valid_ms'
             ).value
         )
-        self.control_epoch = int(
+        configured_epoch = int(
             self.get_parameter(
                 'control_epoch'
             ).value
@@ -181,10 +165,14 @@ class GimbalPDWebSocketNode(Node):
                 'motion_valid_ms must be in [1, 65535]'
             )
 
-        if not 0 <= self.control_epoch <= 0xFFFF:
+        if not 0 <= configured_epoch <= 0xFFFF:
             raise ValueError(
                 'control_epoch must be in [0, 65535]'
             )
+
+        self.control_epoch = configured_epoch or (
+            (time.time_ns() & 0xFFFF) or 1
+        )
 
         self.error_x = 0.0
         self.error_y = 0.0
@@ -198,16 +186,10 @@ class GimbalPDWebSocketNode(Node):
             self.get_clock().now()
         )
 
-        self.last_queued_command = None
-        self.last_queue_time = 0.0
-
-        # 队列长度为 1，新命令覆盖尚未发送的旧命令。
-        self.command_queue = queue.Queue(
-            maxsize=1
-        )
+        self.last_published_command = None
+        self.last_publish_time = 0.0
 
         self.sequence = SequenceGenerator()
-        self.stop_event = threading.Event()
 
         self.subscription = (
             self.create_subscription(
@@ -223,20 +205,17 @@ class GimbalPDWebSocketNode(Node):
             self.control_loop,
         )
 
-        self.websocket_thread = (
-            threading.Thread(
-                target=self.websocket_loop,
-                name='esp32_websocket_client',
-                daemon=True,
-            )
+        self.command_publisher = self.create_publisher(
+            UInt8MultiArray,
+            self.command_topic,
+            10,
         )
 
-        self.websocket_thread.start()
-
         self.get_logger().info(
-            f'PD V1 WebSocket node started: '
+            f'PD V1 RobotLink producer started: '
             f'{self.target_topic} -> '
-            f'{self.websocket_url}'
+            f'{self.command_topic}; '
+            f'control_epoch={self.control_epoch}'
         )
 
     def target_callback(self, message):
@@ -257,11 +236,11 @@ class GimbalPDWebSocketNode(Node):
 
         command_unchanged = (
             command
-            == self.last_queued_command
+            == self.last_published_command
         )
 
         refresh_not_due = (
-            now - self.last_queue_time
+            now - self.last_publish_time
             < self.command_refresh_sec
         )
 
@@ -271,10 +250,10 @@ class GimbalPDWebSocketNode(Node):
         ):
             return
 
-        self.queue_latest_command(command)
+        self.publish_command(command)
 
-        self.last_queued_command = command
-        self.last_queue_time = now
+        self.last_published_command = command
+        self.last_publish_time = now
 
     def build_command(self):
         """Build one V1 motion opcode and payload from the PD state."""
@@ -413,128 +392,8 @@ class GimbalPDWebSocketNode(Node):
         self.prev_error_x = 0.0
         self.prev_error_y = 0.0
 
-    def queue_latest_command(self, command):
-        """Keep only the latest pending real-time motion command."""
-        try:
-            self.command_queue.put_nowait(
-                command
-            )
-            return
-        except queue.Full:
-            pass
-
-        try:
-            self.command_queue.get_nowait()
-        except queue.Empty:
-            pass
-
-        try:
-            self.command_queue.put_nowait(
-                command
-            )
-        except queue.Full:
-            pass
-
-    def websocket_loop(self):
-        """Maintain the connection and send the latest binary command."""
-        connection = None
-        last_sent_command = None
-
-        while not self.stop_event.is_set():
-            if connection is None:
-                try:
-                    connection = (
-                        websocket.create_connection(
-                            self.websocket_url,
-                            timeout=2.0,
-                            enable_multithread=True,
-                        )
-                    )
-
-                    stop_command = self.stop_command()
-                    stop_seq = self.send_command(
-                        connection,
-                        stop_command,
-                    )
-
-                    last_sent_command = stop_command
-
-                    self.get_logger().info(
-                        f'WebSocket connected: '
-                        f'{self.websocket_url}; '
-                        f'initial STOP seq={stop_seq}'
-                    )
-
-                except Exception as error:
-                    self.get_logger().warning(
-                        f'WebSocket connect failed: '
-                        f'{error}'
-                    )
-
-                    self.close_connection(
-                        connection
-                    )
-                    connection = None
-
-                    self.stop_event.wait(
-                        self.reconnect_delay_sec
-                    )
-                    continue
-
-            try:
-                command = (
-                    self.command_queue.get(
-                        timeout=0.1
-                    )
-                )
-            except queue.Empty:
-                continue
-
-            try:
-                seq = self.send_command(
-                    connection,
-                    command,
-                )
-
-                if command != last_sent_command:
-                    self.get_logger().info(
-                        f'WS V1 TX: '
-                        f'{self.describe_command(command)}, '
-                        f'seq={seq}'
-                    )
-
-                last_sent_command = command
-
-            except Exception as error:
-                self.get_logger().warning(
-                    f'WebSocket send failed: '
-                    f'{error}'
-                )
-
-                self.close_connection(
-                    connection
-                )
-                connection = None
-                last_sent_command = None
-
-                # 发送失败时保留最新命令，等待重连。
-                self.queue_latest_command(
-                    command
-                )
-
-        if connection is not None:
-            try:
-                self.send_command(
-                    connection,
-                    self.stop_command(),
-                )
-            except Exception:
-                pass
-
-            self.close_connection(connection)
-
-    def send_command(self, connection, command):
-        """Encode and send one binary V1 motion message."""
+    def encode_command(self, command):
+        """Encode one motion command for the shared RobotLink."""
         opcode, payload = command
 
         flags = MessageFlag.REALTIME
@@ -554,10 +413,14 @@ class GimbalPDWebSocketNode(Node):
             payload=payload,
         )
 
-        connection.send_binary(
-            message.encode()
-        )
+        return seq, message.encode()
 
+    def publish_command(self, command):
+        """Publish one encoded command without owning a network socket."""
+        seq, packet = self.encode_command(command)
+        ros_message = UInt8MultiArray()
+        ros_message.data = list(packet)
+        self.command_publisher.publish(ros_message)
         return seq
 
     @staticmethod
@@ -590,17 +453,6 @@ class GimbalPDWebSocketNode(Node):
         )
 
     @staticmethod
-    def close_connection(connection):
-        """Close a WebSocket connection without masking shutdown."""
-        if connection is None:
-            return
-
-        try:
-            connection.close()
-        except Exception:
-            pass
-
-    @staticmethod
     def clamp(value, minimum, maximum):
         """Clamp a numeric value to an inclusive range."""
         return max(
@@ -609,25 +461,13 @@ class GimbalPDWebSocketNode(Node):
         )
 
     def destroy_node(self):
-        """Request a final stop and terminate the socket worker."""
-        self.queue_latest_command(
-            self.stop_command()
-        )
-
-        time.sleep(0.05)
-
-        self.stop_event.set()
-
-        if self.websocket_thread.is_alive():
-            self.websocket_thread.join(
-                timeout=3.0
-            )
-
+        """Publish a final STOP before destroying ROS resources."""
+        self.publish_command(self.stop_command())
         return super().destroy_node()
 
 
 def main(args=None):
-    """Run the ROS 2 V1 WebSocket controller node."""
+    """Run the ROS 2 V1 RobotLink control producer."""
     rclpy.init(args=args)
 
     node = GimbalPDWebSocketNode()

@@ -218,6 +218,167 @@ static bool destination_is_valid(uint8_t destination)
 }
 
 
+RobotProtocolDecodeStatus RobotProtocol_DecodeMessage(
+    const uint8_t *data,
+    uint16_t length,
+    RobotProtocolMessage *message
+)
+{
+    uint16_t payload_length;
+    uint16_t expected_length;
+
+    if (message == NULL)
+    {
+        return ROBOT_DECODE_NULL_DATA;
+    }
+
+    memset(message, 0, sizeof(*message));
+
+    if (data == NULL)
+    {
+        return ROBOT_DECODE_NULL_DATA;
+    }
+
+    if (length < ROBOT_PROTOCOL_HEADER_SIZE)
+    {
+        return ROBOT_DECODE_HEADER_TOO_SHORT;
+    }
+
+    if (data[0] != ROBOT_PROTOCOL_VERSION)
+    {
+        return ROBOT_DECODE_UNSUPPORTED_VERSION;
+    }
+
+    if ((data[1] & ~ROBOT_KNOWN_FLAGS_MASK) != 0U)
+    {
+        return ROBOT_DECODE_UNKNOWN_FLAGS;
+    }
+
+    payload_length = read_u16_le(data + 8U);
+
+    if (payload_length > ROBOT_PROTOCOL_MAX_PAYLOAD_SIZE)
+    {
+        return ROBOT_DECODE_PAYLOAD_TOO_LARGE;
+    }
+
+    expected_length = (uint16_t)(
+        ROBOT_PROTOCOL_HEADER_SIZE + payload_length
+    );
+
+    if (length != expected_length)
+    {
+        return ROBOT_DECODE_LENGTH_MISMATCH;
+    }
+
+    message->version = data[0];
+    message->flags = data[1];
+    message->src = data[2];
+    message->dst = data[3];
+    message->service = data[4];
+    message->opcode = data[5];
+    message->seq = read_u16_le(data + 6U);
+    message->payload_length = payload_length;
+    message->payload = data + ROBOT_PROTOCOL_HEADER_SIZE;
+
+    return ROBOT_DECODE_OK;
+}
+
+
+const char *RobotProtocol_DecodeStatusName(
+    RobotProtocolDecodeStatus status
+)
+{
+    switch (status)
+    {
+        case ROBOT_DECODE_OK:
+            return "OK";
+
+        case ROBOT_DECODE_NULL_DATA:
+            return "NULL_DATA";
+
+        case ROBOT_DECODE_HEADER_TOO_SHORT:
+            return "HEADER_TOO_SHORT";
+
+        case ROBOT_DECODE_UNSUPPORTED_VERSION:
+            return "UNSUPPORTED_VERSION";
+
+        case ROBOT_DECODE_UNKNOWN_FLAGS:
+            return "UNKNOWN_FLAGS";
+
+        case ROBOT_DECODE_PAYLOAD_TOO_LARGE:
+            return "PAYLOAD_TOO_LARGE";
+
+        case ROBOT_DECODE_LENGTH_MISMATCH:
+            return "LENGTH_MISMATCH";
+
+        default:
+            return "UNKNOWN_STATUS";
+    }
+}
+
+
+bool RobotProtocol_EncodeMessage(
+    const RobotProtocolMessage *message,
+    uint8_t *output,
+    uint16_t output_capacity,
+    uint16_t *output_length
+)
+{
+    uint16_t message_length;
+
+    if (output_length != NULL)
+    {
+        *output_length = 0U;
+    }
+
+    if (
+        message == NULL ||
+        output == NULL ||
+        output_length == NULL ||
+        message->version != ROBOT_PROTOCOL_VERSION ||
+        (message->flags & ~ROBOT_KNOWN_FLAGS_MASK) != 0U ||
+        message->payload_length > ROBOT_PROTOCOL_MAX_PAYLOAD_SIZE ||
+        (
+            message->payload_length > 0U &&
+            message->payload == NULL
+        )
+    )
+    {
+        return false;
+    }
+
+    message_length = (uint16_t)(
+        ROBOT_PROTOCOL_HEADER_SIZE + message->payload_length
+    );
+
+    if (output_capacity < message_length)
+    {
+        return false;
+    }
+
+    output[0] = message->version;
+    output[1] = message->flags;
+    output[2] = message->src;
+    output[3] = message->dst;
+    output[4] = message->service;
+    output[5] = message->opcode;
+    write_u16_le(output + 6U, message->seq);
+    write_u16_le(output + 8U, message->payload_length);
+
+    if (message->payload_length > 0U)
+    {
+        memcpy(
+            output + ROBOT_PROTOCOL_HEADER_SIZE,
+            message->payload,
+            message->payload_length
+        );
+    }
+
+    *output_length = message_length;
+    return true;
+}
+
+
 static void process_encoded_frame(
     RobotProtocolContext *context
 )
@@ -226,7 +387,7 @@ static void process_encoded_frame(
     uint16_t message_length;
     uint16_t received_crc;
     uint16_t expected_crc;
-    uint16_t payload_length;
+    RobotProtocolDecodeStatus decode_status;
     RobotProtocolMessage message;
 
     if (
@@ -269,31 +430,21 @@ static void process_encoded_frame(
         return;
     }
 
-    payload_length = read_u16_le(context->rx_raw + 8U);
+    decode_status = RobotProtocol_DecodeMessage(
+        context->rx_raw,
+        message_length,
+        &message
+    );
 
     if (
-        context->rx_raw[0] != ROBOT_PROTOCOL_VERSION ||
-        (context->rx_raw[1] & ~ROBOT_KNOWN_FLAGS_MASK) != 0U ||
-        !source_is_valid(context->rx_raw[2]) ||
-        !destination_is_valid(context->rx_raw[3]) ||
-        payload_length > ROBOT_PROTOCOL_MAX_PAYLOAD_SIZE ||
-        message_length !=
-            ROBOT_PROTOCOL_HEADER_SIZE + payload_length
+        decode_status != ROBOT_DECODE_OK ||
+        !source_is_valid(message.src) ||
+        !destination_is_valid(message.dst)
     )
     {
         ++context->format_error_count;
         return;
     }
-
-    message.version = context->rx_raw[0];
-    message.flags = context->rx_raw[1];
-    message.src = context->rx_raw[2];
-    message.dst = context->rx_raw[3];
-    message.service = context->rx_raw[4];
-    message.opcode = context->rx_raw[5];
-    message.seq = read_u16_le(context->rx_raw + 6U);
-    message.payload_length = payload_length;
-    message.payload = context->rx_raw + ROBOT_PROTOCOL_HEADER_SIZE;
 
     ++context->valid_frame_count;
 
@@ -301,6 +452,8 @@ static void process_encoded_frame(
     {
         context->message_handler(
             &message,
+            context->rx_raw,
+            message_length,
             context->user_context
         );
     }
@@ -409,39 +562,38 @@ bool RobotProtocol_SendMessage(
     uint16_t raw_length;
     uint16_t encoded_length = 0U;
     uint16_t crc;
+    RobotProtocolMessage message;
 
     if (
         context == NULL ||
-        context->transmit_handler == NULL ||
-        (flags & ~ROBOT_KNOWN_FLAGS_MASK) != 0U ||
-        payload_length > ROBOT_PROTOCOL_MAX_PAYLOAD_SIZE ||
-        (payload_length > 0U && payload == NULL)
+        context->transmit_handler == NULL
     )
     {
         return false;
     }
 
-    context->tx_message[0] = ROBOT_PROTOCOL_VERSION;
-    context->tx_message[1] = flags;
-    context->tx_message[2] = ROBOT_NODE_STM32;
-    context->tx_message[3] = dst;
-    context->tx_message[4] = service;
-    context->tx_message[5] = opcode;
-    write_u16_le(context->tx_message + 6U, sequence);
-    write_u16_le(context->tx_message + 8U, payload_length);
+    message.version = ROBOT_PROTOCOL_VERSION;
+    message.flags = flags;
+    message.src = ROBOT_NODE_STM32;
+    message.dst = dst;
+    message.service = service;
+    message.opcode = opcode;
+    message.seq = sequence;
+    message.payload_length = payload_length;
+    message.payload = payload;
 
-    if (payload_length > 0U)
+    if (
+        !RobotProtocol_EncodeMessage(
+            &message,
+            context->tx_message,
+            (uint16_t)sizeof(context->tx_message),
+            &message_length
+        )
+    )
     {
-        memcpy(
-            context->tx_message + ROBOT_PROTOCOL_HEADER_SIZE,
-            payload,
-            payload_length
-        );
+        return false;
     }
 
-    message_length = (uint16_t)(
-        ROBOT_PROTOCOL_HEADER_SIZE + payload_length
-    );
     memcpy(
         context->tx_raw,
         context->tx_message,

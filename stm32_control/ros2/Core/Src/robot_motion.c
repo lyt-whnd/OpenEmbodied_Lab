@@ -94,23 +94,6 @@ static void stop_motion(
 }
 
 
-static void respond_if_requested(
-    RobotMotionController *controller,
-    const RobotProtocolMessage *message,
-    RobotStatusCode status
-)
-{
-    if ((message->flags & ROBOT_FLAG_ACK_REQUIRED) != 0U)
-    {
-        (void)RobotProtocol_SendResponse(
-            &controller->protocol,
-            message,
-            status
-        );
-    }
-}
-
-
 static RobotStatusCode validate_empty_payload(
     const RobotProtocolMessage *message
 )
@@ -124,7 +107,7 @@ static RobotStatusCode validate_empty_payload(
 }
 
 
-static void handle_move(
+static RobotStatusCode handle_move(
     RobotMotionController *controller,
     const RobotProtocolMessage *message
 )
@@ -133,22 +116,12 @@ static void handle_move(
 
     if (!RobotProtocol_DecodeMotionMove(message, &move))
     {
-        respond_if_requested(
-            controller,
-            message,
-            ROBOT_STATUS_BAD_LENGTH
-        );
-        return;
+        return ROBOT_STATUS_BAD_LENGTH;
     }
 
     if (controller->estop_latched)
     {
-        respond_if_requested(
-            controller,
-            message,
-            ROBOT_STATUS_ESTOP_ACTIVE
-        );
-        return;
+        return ROBOT_STATUS_ESTOP_ACTIVE;
     }
 
     if (
@@ -164,12 +137,7 @@ static void handle_move(
             ROBOT_MOTION_MAX_HEAD_RATE_X10
     )
     {
-        respond_if_requested(
-            controller,
-            message,
-            ROBOT_STATUS_OUT_OF_RANGE
-        );
-        return;
+        return ROBOT_STATUS_OUT_OF_RANGE;
     }
 
     if (
@@ -177,12 +145,7 @@ static void handle_move(
         move.angular_mrad_s != 0
     )
     {
-        respond_if_requested(
-            controller,
-            message,
-            ROBOT_STATUS_NOT_IMPLEMENTED
-        );
-        return;
+        return ROBOT_STATUS_NOT_IMPLEMENTED;
     }
 
     if (
@@ -203,12 +166,7 @@ static void handle_move(
         )
     )
     {
-        respond_if_requested(
-            controller,
-            message,
-            ROBOT_STATUS_OLD_SEQUENCE
-        );
-        return;
+        return ROBOT_STATUS_OLD_SEQUENCE;
     }
 
     controller->last_move_sequence = message->seq;
@@ -224,26 +182,31 @@ static void handle_move(
     );
     controller->motion_timed_out = false;
 
-    respond_if_requested(
-        controller,
-        message,
-        ROBOT_STATUS_OK
-    );
+    return ROBOT_STATUS_OK;
 }
 
 
-static void handle_motion_message(
+RobotStatusCode RobotMotion_HandleMessage(
     RobotMotionController *controller,
     const RobotProtocolMessage *message
 )
 {
     RobotStatusCode status;
 
+    if (controller == NULL || message == NULL)
+    {
+        return ROBOT_STATUS_NOT_IMPLEMENTED;
+    }
+
+    if (message->service != ROBOT_SERVICE_MOTION)
+    {
+        return ROBOT_STATUS_UNKNOWN_SERVICE;
+    }
+
     switch (message->opcode)
     {
         case ROBOT_MOTION_MOVE:
-            handle_move(controller, message);
-            return;
+            return handle_move(controller, message);
 
         case ROBOT_MOTION_STOP:
             status = validate_empty_payload(message);
@@ -254,8 +217,7 @@ static void handle_motion_message(
                 controller->motion_timed_out = false;
             }
 
-            respond_if_requested(controller, message, status);
-            return;
+            return status;
 
         case ROBOT_MOTION_CENTER:
             status = validate_empty_payload(message);
@@ -279,8 +241,7 @@ static void handle_motion_message(
                 apply_servo_angles(controller);
             }
 
-            respond_if_requested(controller, message, status);
-            return;
+            return status;
 
         case ROBOT_MOTION_ESTOP:
             status = validate_empty_payload(message);
@@ -291,8 +252,7 @@ static void handle_motion_message(
                 controller->estop_latched = true;
             }
 
-            respond_if_requested(controller, message, status);
-            return;
+            return status;
 
         case ROBOT_MOTION_CLEAR_ESTOP:
             status = validate_empty_payload(message);
@@ -303,81 +263,16 @@ static void handle_motion_message(
                 stop_motion(controller);
             }
 
-            respond_if_requested(controller, message, status);
-            return;
+            return status;
 
         default:
-            respond_if_requested(
-                controller,
-                message,
-                ROBOT_STATUS_UNKNOWN_OPCODE
-            );
-            return;
+            return ROBOT_STATUS_UNKNOWN_OPCODE;
     }
-}
-
-
-static void protocol_message_received(
-    const RobotProtocolMessage *message,
-    void *user_context
-)
-{
-    RobotMotionController *controller =
-        (RobotMotionController *)user_context;
-
-    if (controller == NULL || message == NULL)
-    {
-        return;
-    }
-
-    RobotMotion_Process(
-        controller,
-        controller->current_time_ms
-    );
-
-    if (message->service == ROBOT_SERVICE_MOTION)
-    {
-        handle_motion_message(controller, message);
-    }
-    else
-    {
-        respond_if_requested(
-            controller,
-            message,
-            ROBOT_STATUS_UNKNOWN_SERVICE
-        );
-    }
-}
-
-
-static bool protocol_transmit(
-    const uint8_t *data,
-    uint16_t length,
-    void *user_context
-)
-{
-    RobotMotionController *controller =
-        (RobotMotionController *)user_context;
-
-    if (
-        controller == NULL ||
-        controller->transmit_handler == NULL
-    )
-    {
-        return false;
-    }
-
-    return controller->transmit_handler(
-        data,
-        length,
-        controller->user_context
-    );
 }
 
 
 void RobotMotion_Init(
     RobotMotionController *controller,
-    RobotProtocolTransmitHandler transmit_handler,
     RobotMotionServoHandler servo_handler,
     void *user_context,
     uint32_t now_ms
@@ -389,7 +284,6 @@ void RobotMotion_Init(
     }
 
     memset(controller, 0, sizeof(*controller));
-    controller->transmit_handler = transmit_handler;
     controller->servo_handler = servo_handler;
     controller->user_context = user_context;
     controller->yaw_x10 = ROBOT_MOTION_YAW_CENTER_X10;
@@ -399,30 +293,7 @@ void RobotMotion_Init(
     controller->current_time_ms = now_ms;
     controller->last_update_ms = now_ms;
 
-    RobotProtocol_Init(
-        &controller->protocol,
-        protocol_transmit,
-        protocol_message_received,
-        controller
-    );
-
     apply_servo_angles(controller);
-}
-
-
-void RobotMotion_InputByte(
-    RobotMotionController *controller,
-    uint8_t byte,
-    uint32_t now_ms
-)
-{
-    if (controller == NULL)
-    {
-        return;
-    }
-
-    controller->current_time_ms = now_ms;
-    RobotProtocol_InputByte(&controller->protocol, byte);
 }
 
 
@@ -481,19 +352,6 @@ void RobotMotion_Process(
         controller->last_update_ms = now_ms;
         controller->motion_timed_out = true;
     }
-}
-
-
-RobotProtocolContext *RobotMotion_GetProtocol(
-    RobotMotionController *controller
-)
-{
-    if (controller == NULL)
-    {
-        return NULL;
-    }
-
-    return &controller->protocol;
 }
 
 

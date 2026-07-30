@@ -53,7 +53,7 @@ void setup()
     /*
     * 2. 初始化 ESP32-CAM 与 STM32 的 UART。
     */
-    if (!stm32UartInit())
+    if (!stm32TransportInit())
     {
         stopProgram(
             "STM32 UART initialization failed"
@@ -117,7 +117,13 @@ void loop()
     /*
      * 检查 STM32 是否返回 ACK 或状态信息。
      */
-    stm32UartPoll();
+    stm32TransportPoll();
+
+    /*
+     * 统一从有界队列发送网络消息，确保回调栈上的消息已被复制，
+     * 且任何一次循环最多发送一条，避免网络发送长期占用主循环。
+     */
+    websocketServicePoll();
 
     /*
      * 未连接 Linux 时广播设备身份和服务端点；WebSocket 连接后

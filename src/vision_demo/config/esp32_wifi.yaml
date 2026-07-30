@@ -10,11 +10,19 @@ color_tracker_node:
   ros__parameters:
     image_topic: "/image_raw"
 
+robot_link_node:
+  ros__parameters:
+    websocket_url: "ws://192.168.1.100/ws"
+    reconnect_delay_sec: 1.0
+    send_queue_size: 8
+    command_topic: "/robot_link/tx"
+    receive_topic: "/robot_link/rx"
+
 gimbal_pd_websocket_node:
   ros__parameters:
     target_topic: "/target_position"
 
-    websocket_url: "ws://192.168.1.100/ws"
+    command_topic: "/robot_link/tx"
 
     control_hz: 10.0
 
@@ -32,8 +40,7 @@ gimbal_pd_websocket_node:
 
     target_timeout_sec: 0.5
     command_refresh_sec: 0.5
-    reconnect_delay_sec: 2.0
-
     # V1 MOTION/MOVE command lifetime and control ownership generation.
     motion_valid_ms: 300
-    control_epoch: 1
+    # Zero generates a new epoch each process start.
+    control_epoch: 0

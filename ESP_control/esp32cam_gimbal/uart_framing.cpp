@@ -197,7 +197,7 @@ bool encodeApplicationFrame(
     if (
         message == nullptr ||
         wireFrame == nullptr ||
-        messageLength > ProtocolV1::MAX_MESSAGE_SIZE ||
+        messageLength > MAX_APPLICATION_FRAME_SIZE ||
         wireCapacity < 2U
     )
     {

@@ -89,6 +89,18 @@ typedef enum
 } RobotStatusCode;
 
 
+typedef enum
+{
+    ROBOT_DECODE_OK,
+    ROBOT_DECODE_NULL_DATA,
+    ROBOT_DECODE_HEADER_TOO_SHORT,
+    ROBOT_DECODE_UNSUPPORTED_VERSION,
+    ROBOT_DECODE_UNKNOWN_FLAGS,
+    ROBOT_DECODE_PAYLOAD_TOO_LARGE,
+    ROBOT_DECODE_LENGTH_MISMATCH
+} RobotProtocolDecodeStatus;
+
+
 typedef struct
 {
     uint8_t version;
@@ -123,6 +135,8 @@ typedef bool (*RobotProtocolTransmitHandler)(
 
 typedef void (*RobotProtocolMessageHandler)(
     const RobotProtocolMessage *message,
+    const uint8_t *raw,
+    uint16_t raw_length,
     void *user_context
 );
 
@@ -148,6 +162,26 @@ typedef struct
     RobotProtocolMessageHandler message_handler;
     void *user_context;
 } RobotProtocolContext;
+
+
+RobotProtocolDecodeStatus RobotProtocol_DecodeMessage(
+    const uint8_t *data,
+    uint16_t length,
+    RobotProtocolMessage *message
+);
+
+
+const char *RobotProtocol_DecodeStatusName(
+    RobotProtocolDecodeStatus status
+);
+
+
+bool RobotProtocol_EncodeMessage(
+    const RobotProtocolMessage *message,
+    uint8_t *output,
+    uint16_t output_capacity,
+    uint16_t *output_length
+);
 
 
 void RobotProtocol_Init(

@@ -5,3 +5,4 @@ log/
 __pycache__/
 *.pyc
 ESP_control/esp32cam_gimbal/secrets.h
+*.md

@@ -1,7 +1,7 @@
 """Install the vision_demo ROS 2 Python package."""
 
-import os
 from glob import glob
+import os
 
 from setuptools import find_packages, setup
 
@@ -98,6 +98,10 @@ setup(
                 'gimbal_pd_websocket = '
                 'vision_demo.'
                 'gimbal_pd_websocket_node:main'
+            ),
+            (
+                'robot_link = '
+                'vision_demo.link_node:main'
             ),
             (
                 'esp32_discovery = '

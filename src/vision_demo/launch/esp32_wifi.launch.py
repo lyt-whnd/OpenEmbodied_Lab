@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Launch the ESP32 camera, tracker, RobotLink, and controller nodes."""
 
 import os
 
@@ -7,10 +8,12 @@ from ament_index_python.packages import (
 )
 
 from launch import LaunchDescription
+
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    """Build the ESP32 Wi-Fi control launch description."""
     package_directory = (
         get_package_share_directory(
             'vision_demo'
@@ -39,6 +42,14 @@ def generate_launch_description():
         parameters=[config_file],
     )
 
+    robot_link_node = Node(
+        package='vision_demo',
+        executable='robot_link',
+        name='robot_link_node',
+        output='screen',
+        parameters=[config_file],
+    )
+
     websocket_control_node = Node(
         package='vision_demo',
         executable='gimbal_pd_websocket',
@@ -50,5 +61,6 @@ def generate_launch_description():
     return LaunchDescription([
         esp32_camera_node,
         color_tracker_node,
+        robot_link_node,
         websocket_control_node,
     ])

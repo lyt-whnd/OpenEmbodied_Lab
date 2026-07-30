@@ -6,240 +6,353 @@
 
 #include "protocol_v1.h"
 #include "uart_framing.h"
+#include "v1_vectors.h"
+
+
+static_assert(
+    ProtocolV1::VERSION == V1_GOLDEN_PROTOCOL_VERSION,
+    "protocol version differs from canonical vectors"
+);
+static_assert(
+    ProtocolV1::HEADER_SIZE == V1_GOLDEN_HEADER_SIZE,
+    "header size differs from canonical vectors"
+);
+static_assert(
+    ProtocolV1::MAX_PAYLOAD_SIZE ==
+        V1_GOLDEN_MAX_PAYLOAD_SIZE,
+    "payload limit differs from canonical vectors"
+);
+static_assert(
+    ProtocolV1::KNOWN_FLAGS_MASK ==
+        V1_GOLDEN_KNOWN_FLAGS_MASK,
+    "flag mask differs from canonical vectors"
+);
+static_assert(
+    ProtocolV1::NODE_LINUX == V1_GOLDEN_NODE_LINUX &&
+        ProtocolV1::NODE_ESP32 == V1_GOLDEN_NODE_ESP32 &&
+        ProtocolV1::NODE_STM32 == V1_GOLDEN_NODE_STM32 &&
+        ProtocolV1::NODE_BROADCAST == V1_GOLDEN_NODE_BROADCAST,
+    "node IDs differ from canonical vectors"
+);
+static_assert(
+    ProtocolV1::SERVICE_SYSTEM == V1_GOLDEN_SERVICE_SYSTEM &&
+        ProtocolV1::SERVICE_MOTION == V1_GOLDEN_SERVICE_MOTION &&
+        ProtocolV1::SERVICE_TELEMETRY ==
+            V1_GOLDEN_SERVICE_TELEMETRY &&
+        ProtocolV1::SERVICE_CONFIG == V1_GOLDEN_SERVICE_CONFIG &&
+        ProtocolV1::SERVICE_EVENT == V1_GOLDEN_SERVICE_EVENT &&
+        ProtocolV1::SERVICE_OTA == V1_GOLDEN_SERVICE_OTA,
+    "service IDs differ from canonical vectors"
+);
 
 
 namespace
 {
 
-const uint8_t LINUX_MOVE_MESSAGE[] = {
-    0x01, 0x08, 0x01, 0x03, 0x10,
-    0x01, 0x34, 0x12, 0x0C, 0x00,
-    0x02, 0x00, 0x2C, 0x01, 0x96,
-    0x00, 0xD4, 0xFE, 0xC8, 0x00,
-    0x00, 0x00
-};
-
-
-void testKnownLinuxMessage()
+const V1GoldenValidVector &findValidVector(
+    const char *name
+)
 {
-    ProtocolV1::MessageView message = {};
+    for (
+        size_t index = 0;
+        index < V1_GOLDEN_VALID_VECTOR_COUNT;
+        index++
+    )
+    {
+        if (
+            strcmp(
+                V1_GOLDEN_VALID_VECTORS[index].name,
+                name
+            ) == 0
+        )
+        {
+            return V1_GOLDEN_VALID_VECTORS[index];
+        }
+    }
 
-    const ProtocolV1::DecodeStatus status =
-        ProtocolV1::decodeMessage(
-            LINUX_MOVE_MESSAGE,
-            sizeof(LINUX_MOVE_MESSAGE),
-            message
+    assert(false);
+    return V1_GOLDEN_VALID_VECTORS[0];
+}
+
+
+void testGoldenValidMessages()
+{
+    for (
+        size_t index = 0;
+        index < V1_GOLDEN_VALID_VECTOR_COUNT;
+        index++
+    )
+    {
+        const V1GoldenValidVector &vector =
+            V1_GOLDEN_VALID_VECTORS[index];
+        ProtocolV1::MessageView message = {};
+
+        const ProtocolV1::DecodeStatus status =
+            ProtocolV1::decodeMessage(
+                vector.message,
+                vector.message_length,
+                message
+            );
+
+        assert(status == ProtocolV1::DecodeStatus::OK);
+        assert(message.version == vector.version);
+        assert(message.flags == vector.flags);
+        assert(message.src == vector.src);
+        assert(message.dst == vector.dst);
+        assert(message.service == vector.service);
+        assert(message.opcode == vector.opcode);
+        assert(message.seq == vector.seq);
+        assert(message.payloadLength == vector.payload_length);
+        assert(
+            message.payload ==
+            vector.message + ProtocolV1::HEADER_SIZE
         );
 
-    assert(status == ProtocolV1::DecodeStatus::OK);
-    assert(message.version == 1U);
-    assert(message.flags == ProtocolV1::FLAG_REALTIME);
-    assert(message.src == ProtocolV1::NODE_LINUX);
-    assert(message.dst == ProtocolV1::NODE_STM32);
-    assert(message.service == ProtocolV1::SERVICE_MOTION);
-    assert(message.opcode == ProtocolV1::MOTION_MOVE);
-    assert(message.seq == 0x1234U);
-    assert(message.payloadLength == 12U);
+        uint8_t encoded[
+            ProtocolV1::MAX_MESSAGE_SIZE
+        ] = {};
+        size_t encodedLength = 0;
+
+        assert(
+            ProtocolV1::encodeMessage(
+                message,
+                encoded,
+                sizeof(encoded),
+                encodedLength
+            )
+        );
+        assert(encodedLength == vector.message_length);
+        assert(
+            memcmp(
+                encoded,
+                vector.message,
+                vector.message_length
+            ) == 0
+        );
+    }
+}
+
+
+void testGoldenInvalidMessages()
+{
+    for (
+        size_t index = 0;
+        index < V1_GOLDEN_INVALID_VECTOR_COUNT;
+        index++
+    )
+    {
+        const V1GoldenInvalidVector &vector =
+            V1_GOLDEN_INVALID_VECTORS[index];
+        ProtocolV1::MessageView message = {};
+
+        const ProtocolV1::DecodeStatus status =
+            ProtocolV1::decodeMessage(
+                vector.message,
+                vector.message_length,
+                message
+            );
+
+        assert(status != ProtocolV1::DecodeStatus::OK);
+        assert(
+            strcmp(
+                ProtocolV1::decodeStatusName(status),
+                vector.expected_error
+            ) == 0
+        );
+    }
+}
+
+
+void testKnownLinuxMessagePayload()
+{
+    const V1GoldenValidVector &vector =
+        findValidVector("linux_motion_move");
+    ProtocolV1::MessageView message = {};
+
+    assert(
+        ProtocolV1::decodeMessage(
+            vector.message,
+            vector.message_length,
+            message
+        ) == ProtocolV1::DecodeStatus::OK
+    );
     assert(message.payload[0] == 0x02U);
     assert(message.payload[7] == 0xFEU);
 }
 
 
-void testPongEncoding()
-{
-    const uint8_t expected[] = {
-        0x01, 0x02, 0x02, 0x01, 0x01,
-        0x02, 0x34, 0x12, 0x00, 0x00
-    };
-
-    ProtocolV1::MessageView pong = {};
-
-    pong.version = ProtocolV1::VERSION;
-    pong.flags = ProtocolV1::FLAG_RESPONSE;
-    pong.src = ProtocolV1::NODE_ESP32;
-    pong.dst = ProtocolV1::NODE_LINUX;
-    pong.service = ProtocolV1::SERVICE_SYSTEM;
-    pong.opcode = ProtocolV1::SYSTEM_PONG;
-    pong.seq = 0x1234U;
-    pong.payloadLength = 0;
-    pong.payload = nullptr;
-
-    uint8_t encoded[
-        ProtocolV1::MAX_MESSAGE_SIZE
-    ] = {};
-
-    size_t encodedLength = 0;
-
-    assert(
-        ProtocolV1::encodeMessage(
-            pong,
-            encoded,
-            sizeof(encoded),
-            encodedLength
-        )
-    );
-    assert(encodedLength == sizeof(expected));
-    assert(
-        memcmp(
-            encoded,
-            expected,
-            sizeof(expected)
-        ) == 0
-    );
-}
-
-
 void testCrcReferenceVector()
 {
-    static const uint8_t reference[] = {
-        '1', '2', '3', '4', '5',
-        '6', '7', '8', '9'
-    };
-
     assert(
         UartFraming::crc16CcittFalse(
-            reference,
-            sizeof(reference)
-        ) == 0x29B1U
+            V1_GOLDEN_CRC_DATA,
+            sizeof(V1_GOLDEN_CRC_DATA)
+        ) == V1_GOLDEN_CRC_EXPECTED
     );
 }
 
 
-void testUartFrameRoundTrip()
+void testAllGoldenUartFrameRoundTrips()
 {
+    for (
+        size_t index = 0;
+        index < V1_GOLDEN_VALID_VECTOR_COUNT;
+        index++
+    )
+    {
+        const V1GoldenValidVector &vector =
+            V1_GOLDEN_VALID_VECTORS[index];
+        uint8_t wireFrame[
+            UartFraming::MAX_WIRE_FRAME_SIZE
+        ] = {};
+        size_t wireLength = 0;
+
+        assert(
+            UartFraming::encodeApplicationFrame(
+                vector.message,
+                vector.message_length,
+                wireFrame,
+                sizeof(wireFrame),
+                wireLength
+            )
+        );
+        assert(wireLength > vector.message_length);
+        assert(wireFrame[wireLength - 1U] == 0U);
+
+        uint8_t decoded[
+            ProtocolV1::MAX_MESSAGE_SIZE
+        ] = {};
+        size_t decodedLength = 0;
+
+        assert(
+            UartFraming::decodeApplicationFrame(
+                wireFrame,
+                wireLength - 1U,
+                decoded,
+                sizeof(decoded),
+                decodedLength
+            ) == UartFraming::DecodeStatus::OK
+        );
+        assert(decodedLength == vector.message_length);
+        assert(
+            memcmp(
+                decoded,
+                vector.message,
+                decodedLength
+            ) == 0
+        );
+    }
+}
+
+
+void testCorruptUartFrameIsRejected()
+{
+    const V1GoldenValidVector &vector =
+        findValidVector("linux_motion_move");
     uint8_t wireFrame[
         UartFraming::MAX_WIRE_FRAME_SIZE
     ] = {};
-
     size_t wireLength = 0;
+    uint8_t decoded[
+        ProtocolV1::MAX_MESSAGE_SIZE
+    ] = {};
+    size_t decodedLength = 0;
 
     assert(
         UartFraming::encodeApplicationFrame(
-            LINUX_MOVE_MESSAGE,
-            sizeof(LINUX_MOVE_MESSAGE),
+            vector.message,
+            vector.message_length,
             wireFrame,
             sizeof(wireFrame),
             wireLength
         )
-    );
-    assert(wireLength > sizeof(LINUX_MOVE_MESSAGE));
-    assert(wireFrame[wireLength - 1U] == 0U);
-
-    uint8_t decoded[
-        ProtocolV1::MAX_MESSAGE_SIZE
-    ] = {};
-
-    size_t decodedLength = 0;
-
-    const UartFraming::DecodeStatus status =
-        UartFraming::decodeApplicationFrame(
-            wireFrame,
-            wireLength - 1U,
-            decoded,
-            sizeof(decoded),
-            decodedLength
-        );
-
-    assert(status == UartFraming::DecodeStatus::OK);
-    assert(decodedLength == sizeof(LINUX_MOVE_MESSAGE));
-    assert(
-        memcmp(
-            decoded,
-            LINUX_MOVE_MESSAGE,
-            decodedLength
-        ) == 0
     );
 
     wireFrame[3] ^= 0x01U;
 
-    const UartFraming::DecodeStatus corruptStatus =
+    assert(
         UartFraming::decodeApplicationFrame(
             wireFrame,
             wireLength - 1U,
             decoded,
             sizeof(decoded),
             decodedLength
-        );
-
-    assert(corruptStatus != UartFraming::DecodeStatus::OK);
+        ) != UartFraming::DecodeStatus::OK
+    );
 }
 
 
-void testMaximumSizeFrame()
+void testFramingBoundaryErrors()
 {
     uint8_t message[
         ProtocolV1::MAX_MESSAGE_SIZE
     ] = {};
+    size_t messageLength = 0;
+    const uint8_t emptyRaw[] = {0x01U};
 
-    message[0] = ProtocolV1::VERSION;
-    message[1] = ProtocolV1::FLAG_REALTIME;
-    message[2] = ProtocolV1::NODE_LINUX;
-    message[3] = ProtocolV1::NODE_STM32;
-    message[4] = ProtocolV1::SERVICE_OTA;
-    message[5] = 0x02U;
-
-    ProtocolV1::writeUint16Le(
-        message + 6,
-        0xFFFFU
-    );
-    ProtocolV1::writeUint16Le(
-        message + 8,
-        ProtocolV1::MAX_PAYLOAD_SIZE
+    assert(
+        UartFraming::decodeApplicationFrame(
+            emptyRaw,
+            sizeof(emptyRaw),
+            message,
+            sizeof(message),
+            messageLength
+        ) == UartFraming::DecodeStatus::FRAME_TOO_SHORT
     );
 
-    for (
-        size_t index = ProtocolV1::HEADER_SIZE;
-        index < sizeof(message);
-        index++
-    )
-    {
-        message[index] =
-            static_cast<uint8_t>(index);
-    }
+    uint8_t oversized[
+        UartFraming::MAX_COBS_FRAME_SIZE + 1U
+    ] = {};
 
+    assert(
+        UartFraming::decodeApplicationFrame(
+            oversized,
+            sizeof(oversized),
+            message,
+            sizeof(message),
+            messageLength
+        ) == UartFraming::DecodeStatus::INPUT_TOO_LARGE
+    );
+
+    const V1GoldenValidVector &vector =
+        findValidVector("linux_motion_move");
     uint8_t wireFrame[
         UartFraming::MAX_WIRE_FRAME_SIZE
     ] = {};
-
     size_t wireLength = 0;
 
     assert(
         UartFraming::encodeApplicationFrame(
-            message,
-            sizeof(message),
+            vector.message,
+            vector.message_length,
             wireFrame,
             sizeof(wireFrame),
             wireLength
         )
     );
-    assert(
-        wireLength <=
-        UartFraming::MAX_WIRE_FRAME_SIZE
-    );
-
-    uint8_t decoded[
-        ProtocolV1::MAX_MESSAGE_SIZE
-    ] = {};
-
-    size_t decodedLength = 0;
-
+    assert(wireLength > 2U);
     assert(
         UartFraming::decodeApplicationFrame(
             wireFrame,
-            wireLength - 1U,
-            decoded,
-            sizeof(decoded),
-            decodedLength
-        ) ==
-        UartFraming::DecodeStatus::OK
-    );
-    assert(decodedLength == sizeof(message));
-    assert(
-        memcmp(
-            decoded,
+            wireLength - 2U,
             message,
-            sizeof(message)
-        ) == 0
+            sizeof(message),
+            messageLength
+        ) != UartFraming::DecodeStatus::OK
+    );
+}
+
+
+void testNullApplicationDataIsRejected()
+{
+    ProtocolV1::MessageView message = {};
+
+    assert(
+        ProtocolV1::decodeMessage(
+            nullptr,
+            0,
+            message
+        ) == ProtocolV1::DecodeStatus::NULL_DATA
     );
 }
 
@@ -248,11 +361,14 @@ void testMaximumSizeFrame()
 
 int main()
 {
-    testKnownLinuxMessage();
-    testPongEncoding();
+    testGoldenValidMessages();
+    testGoldenInvalidMessages();
+    testKnownLinuxMessagePayload();
     testCrcReferenceVector();
-    testUartFrameRoundTrip();
-    testMaximumSizeFrame();
+    testAllGoldenUartFrameRoundTrips();
+    testCorruptUartFrameIsRejected();
+    testFramingBoundaryErrors();
+    testNullApplicationDataIsRejected();
 
     std::cout
         << "ESP32 protocol V1 host tests passed"

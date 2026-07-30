@@ -1,4 +1,4 @@
-"""Tests for V1 binary messages emitted by the WebSocket controller."""
+"""Tests for V1 packets emitted by the RobotLink control producer."""
 
 from types import SimpleNamespace
 
@@ -16,20 +16,11 @@ from vision_demo.protocol_v1 import (
 )
 
 
-class _FakeConnection:
-    def __init__(self):
-        self.sent_binary = []
-
-    def send_binary(self, packet):
-        self.sent_binary.append(packet)
-
-
-def test_send_move_uses_one_binary_v1_frame():
-    """A MOVE command must become one real-time binary frame."""
+def test_encode_move_uses_one_realtime_v1_packet():
+    """A MOVE command must become one real-time application packet."""
     sender = SimpleNamespace(
         sequence=SequenceGenerator(initial=41)
     )
-    connection = _FakeConnection()
     payload = MotionMovePayload(
         control_epoch=3,
         valid_ms=300,
@@ -39,18 +30,14 @@ def test_send_move_uses_one_binary_v1_frame():
         head_pitch_rate_x10=100,
     ).encode()
 
-    seq = GimbalPDWebSocketNode.send_command(
+    seq, packet = GimbalPDWebSocketNode.encode_command(
         sender,
-        connection,
         (MotionOpcode.MOVE, payload),
     )
 
     assert seq == 41
-    assert len(connection.sent_binary) == 1
 
-    message = ApplicationMessage.decode(
-        connection.sent_binary[0]
-    )
+    message = ApplicationMessage.decode(packet)
 
     assert message.flags == int(MessageFlag.REALTIME)
     assert message.src == int(NodeId.LINUX)
@@ -70,24 +57,19 @@ def test_send_move_uses_one_binary_v1_frame():
     )
 
 
-def test_send_stop_requests_ack_with_empty_payload():
+def test_encode_stop_requests_ack_with_empty_payload():
     """A normal STOP must request acknowledgement and carry no payload."""
     sender = SimpleNamespace(
         sequence=SequenceGenerator(initial=7)
     )
-    connection = _FakeConnection()
-
-    seq = GimbalPDWebSocketNode.send_command(
+    seq, packet = GimbalPDWebSocketNode.encode_command(
         sender,
-        connection,
         (MotionOpcode.STOP, b''),
     )
 
     assert seq == 7
 
-    message = ApplicationMessage.decode(
-        connection.sent_binary[0]
-    )
+    message = ApplicationMessage.decode(packet)
 
     assert message.flags == int(MessageFlag.ACK_REQUIRED)
     assert message.opcode == int(MotionOpcode.STOP)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Control STM32 head servos through ESP32-routed V1 messages."""
+"""Publish keyboard motion commands to the shared RobotLink."""
 
 import os
 import random
@@ -13,7 +13,8 @@ from typing import List, Optional, Tuple
 import rclpy
 from rclpy.node import Node
 
-from vision_demo.esp32_discovery import listen_for_robots
+from std_msgs.msg import UInt8MultiArray
+
 from vision_demo.protocol_v1 import (
     ApplicationMessage,
     MessageFlag,
@@ -23,8 +24,6 @@ from vision_demo.protocol_v1 import (
     SequenceGenerator,
     ServiceId,
 )
-
-import websocket
 
 
 DIRECTION_UP = 'up'
@@ -122,16 +121,13 @@ def encode_motion_command(
 
 
 class KeyboardMotionNode(Node):
-    """Send keyboard and random head motion through ESP32 WebSocket routing."""
+    """Publish keyboard and random head motion through RobotLink."""
 
     def __init__(self):
         """Initialize parameters, terminal input, and the control timer."""
         super().__init__('keyboard_motion_node')
 
-        self.declare_parameter('websocket_url', '')
-        self.declare_parameter('device_id', '')
-        self.declare_parameter('discovery_timeout_sec', 10.0)
-        self.declare_parameter('connect_retry_sec', 1.0)
+        self.declare_parameter('command_topic', '/robot_link/tx')
         self.declare_parameter('command_hz', 10.0)
         self.declare_parameter('head_rate_deg_s', 30.0)
         self.declare_parameter('move_valid_ms', 300)
@@ -139,19 +135,8 @@ class KeyboardMotionNode(Node):
         self.declare_parameter('auto_change_sec', 0.7)
         self.declare_parameter('control_epoch', 0)
 
-        self.configured_websocket_url = str(
-            self.get_parameter('websocket_url').value
-        )
-        self.device_id = str(
-            self.get_parameter('device_id').value
-        )
-        self.discovery_timeout_sec = float(
-            self.get_parameter(
-                'discovery_timeout_sec'
-            ).value
-        )
-        self.connect_retry_sec = float(
-            self.get_parameter('connect_retry_sec').value
+        self.command_topic = str(
+            self.get_parameter('command_topic').value
         )
         self.command_hz = float(
             self.get_parameter('command_hz').value
@@ -171,16 +156,6 @@ class KeyboardMotionNode(Node):
         configured_epoch = int(
             self.get_parameter('control_epoch').value
         )
-
-        if self.discovery_timeout_sec <= 0.0:
-            raise ValueError(
-                'discovery_timeout_sec must be greater than zero'
-            )
-
-        if self.connect_retry_sec <= 0.0:
-            raise ValueError(
-                'connect_retry_sec must be greater than zero'
-            )
 
         if self.command_hz <= 0.0:
             raise ValueError('command_hz must be greater than zero')
@@ -214,13 +189,10 @@ class KeyboardMotionNode(Node):
             round(head_rate_deg_s * 10.0)
         )
         self.control_epoch = configured_epoch or (
-            time.time_ns() & 0xFFFF
+            (time.time_ns() & 0xFFFF) or 1
         )
 
         self.sequence = SequenceGenerator()
-        self.connection = None
-        self.active_websocket_url = ''
-        self.next_connect_at = 0.0
 
         self.key_decoder = KeySequenceDecoder()
         self.stdin_fd = sys.stdin.fileno()
@@ -249,6 +221,11 @@ class KeyboardMotionNode(Node):
             1.0 / max(self.command_hz, 20.0),
             self.control_tick,
         )
+        self.command_publisher = self.create_publisher(
+            UInt8MultiArray,
+            self.command_topic,
+            10,
+        )
 
         self.get_logger().info(
             'Keyboard control ready: arrows=move, '
@@ -256,88 +233,15 @@ class KeyboardMotionNode(Node):
         )
         self.get_logger().info(
             f'control_epoch={self.control_epoch}, '
-            f'head_rate={head_rate_deg_s:.1f} deg/s'
+            f'head_rate={head_rate_deg_s:.1f} deg/s, '
+            f'topic={self.command_topic}'
         )
-
-    def _discover_websocket_url(self) -> Optional[str]:
-        robots = listen_for_robots(
-            timeout=self.discovery_timeout_sec,
-            device_id=self.device_id or None,
-        )
-
-        try:
-            robot = next(robots)
-        except StopIteration:
-            return None
-        finally:
-            robots.close()
-
-        self.get_logger().info(
-            f'Discovered {robot.device_id} at {robot.ip}'
-        )
-        return robot.websocket_url
-
-    def _ensure_connection(self) -> bool:
-        if self.connection is not None:
-            return True
-
-        now = time.monotonic()
-
-        if now < self.next_connect_at:
-            return False
-
-        websocket_url = self.configured_websocket_url
-
-        if not websocket_url:
-            websocket_url = self._discover_websocket_url() or ''
-
-        if not websocket_url:
-            self.get_logger().warning(
-                'No ESP32 discovery packet received'
-            )
-            self.next_connect_at = now + self.connect_retry_sec
-            return False
-
-        try:
-            self.connection = websocket.create_connection(
-                websocket_url,
-                timeout=2.0,
-                enable_multithread=True,
-            )
-            self.active_websocket_url = websocket_url
-            self.get_logger().info(
-                f'WebSocket connected: {websocket_url}'
-            )
-
-            return self._send_opcode(MotionOpcode.STOP)
-        except Exception as error:
-            self.get_logger().warning(
-                f'WebSocket connection failed: {error}'
-            )
-            self._close_connection()
-            self.next_connect_at = now + self.connect_retry_sec
-            return False
-
-    def _close_connection(self) -> None:
-        connection = self.connection
-        self.connection = None
-
-        if connection is None:
-            return
-
-        try:
-            connection.close()
-        except Exception:
-            pass
 
     def _send_opcode(
         self,
         opcode: MotionOpcode,
         payload: bytes = b'',
     ) -> bool:
-        if self.connection is None:
-            return False
-
         sequence = self.sequence.next_seq()
         packet = encode_motion_command(
             opcode,
@@ -345,18 +249,10 @@ class KeyboardMotionNode(Node):
             payload,
         )
 
-        try:
-            self.connection.send_binary(packet)
-            return True
-        except Exception as error:
-            self.get_logger().warning(
-                f'WebSocket send failed: {error}'
-            )
-            self._close_connection()
-            self.next_connect_at = (
-                time.monotonic() + self.connect_retry_sec
-            )
-            return False
+        message = UInt8MultiArray()
+        message.data = list(packet)
+        self.command_publisher.publish(message)
+        return True
 
     def _send_direction(self, direction: str) -> bool:
         yaw_rate, pitch_rate = direction_to_head_rates(
@@ -472,9 +368,6 @@ class KeyboardMotionNode(Node):
             if self.quit_requested:
                 return
 
-        if not self._ensure_connection():
-            return
-
         direction = self._current_direction(now)
 
         if direction is None:
@@ -499,12 +392,10 @@ class KeyboardMotionNode(Node):
                 self.last_send_at = now
 
     def stop_center_and_close(self) -> None:
-        """Send normal STOP then CENTER through ESP32 and close the socket."""
-        if self.connection is not None:
-            self._send_opcode(MotionOpcode.STOP)
-            self._send_opcode(MotionOpcode.CENTER)
+        """Publish normal STOP then CENTER and clear local motion state."""
+        self._send_opcode(MotionOpcode.STOP)
+        self._send_opcode(MotionOpcode.CENTER)
 
-        self._close_connection()
         self.last_direction = None
         self.auto_enabled = False
         self.manual_direction = None
@@ -531,7 +422,7 @@ class KeyboardMotionNode(Node):
 
 
 def main(args=None):
-    """Run the interactive keyboard motion node."""
+    """Run the interactive RobotLink keyboard motion producer."""
     rclpy.init(args=args)
     node = None
 

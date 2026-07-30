@@ -1,8 +1,8 @@
 """Robot application protocol V1 codec and motion payload helpers."""
 
+import struct
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
-import struct
 
 
 PROTOCOL_VERSION = 1
@@ -25,6 +25,14 @@ class MessageFlag(IntFlag):
     RESPONSE = 1 << 1
     ERROR = 1 << 2
     REALTIME = 1 << 3
+
+
+KNOWN_FLAGS_MASK = int(
+    MessageFlag.ACK_REQUIRED
+    | MessageFlag.RESPONSE
+    | MessageFlag.ERROR
+    | MessageFlag.REALTIME
+)
 
 
 class NodeId(IntEnum):
@@ -108,6 +116,11 @@ class ApplicationMessage:
                 f'unsupported protocol version: {self.version}'
             )
 
+        if self.flags & ~KNOWN_FLAGS_MASK:
+            raise ProtocolError(
+                f'unknown message flags: 0x{self.flags:02x}'
+            )
+
         if not isinstance(
             self.payload,
             (bytes, bytearray, memoryview),
@@ -162,6 +175,11 @@ class ApplicationMessage:
         if version != PROTOCOL_VERSION:
             raise ProtocolError(
                 f'unsupported protocol version: {version}'
+            )
+
+        if flags & ~KNOWN_FLAGS_MASK:
+            raise ProtocolError(
+                f'unknown message flags: 0x{flags:02x}'
             )
 
         if payload_len > MAX_PAYLOAD_SIZE:

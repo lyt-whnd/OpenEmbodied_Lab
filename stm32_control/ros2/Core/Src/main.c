@@ -22,7 +22,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+#include "robot_dispatcher.h"
 #include "robot_motion.h"
+#include "robot_transport.h"
 
 /* USER CODE END Includes */
 
@@ -48,8 +50,9 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
-uint8_t rx_data;
 RobotMotionController robot_motion;
+RobotDispatcher robot_dispatcher;
+RobotTransport robot_transport;
 
 /* USER CODE END PV */
 
@@ -116,12 +119,30 @@ static void Robot_Apply_Servo_Angles(
 }
 
 /*
- * robot_protocol 的唯一 UART 输出接口。
- * 发出的内容已经是 COBS(V1 + CRC16) + 0x00。
+ * UART transport hardware callbacks. The transport owns buffering, counters,
+ * and protocol delivery; these wrappers only adapt STM32 HAL.
  */
-static bool Robot_UART_Transmit(
+static bool Robot_UART_Arm_Receive(
+    uint8_t *destination,
+    void *user_context
+)
+{
+    (void)user_context;
+
+    return (
+        HAL_UART_Receive_IT(
+            &huart1,
+            destination,
+            1U
+        ) == HAL_OK
+    );
+}
+
+
+static bool Robot_UART_Write(
     const uint8_t *data,
     uint16_t length,
+    uint32_t timeout_ms,
     void *user_context
 )
 {
@@ -132,9 +153,18 @@ static bool Robot_UART_Transmit(
             &huart1,
             (uint8_t *)data,
             length,
-            100
+            timeout_ms
         ) == HAL_OK
     );
+}
+
+
+static uint32_t Robot_UART_Get_Time(
+    void *user_context
+)
+{
+    (void)user_context;
+    return HAL_GetTick();
 }
 
 
@@ -180,11 +210,37 @@ HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 
 RobotMotion_Init(
     &robot_motion,
-    Robot_UART_Transmit,
     Robot_Apply_Servo_Angles,
     NULL,
     HAL_GetTick()
 );
+
+RobotTransport_Init(
+    &robot_transport,
+    NULL,
+    Robot_UART_Arm_Receive,
+    Robot_UART_Write,
+    Robot_UART_Get_Time,
+    NULL
+);
+
+RobotDispatcher_Init(
+    &robot_dispatcher,
+    &robot_motion,
+    RobotTransport_Transmit,
+    &robot_transport,
+    HAL_GetTick()
+);
+
+robot_transport.protocol =
+    RobotDispatcher_GetProtocol(
+        &robot_dispatcher
+    );
+
+if (!RobotTransport_StartRx(&robot_transport))
+{
+    Error_Handler();
+}
 
 
 
@@ -201,15 +257,13 @@ RobotMotion_Init(
 
     uint32_t now_ms = HAL_GetTick();
 
-    if (HAL_UART_Receive(&huart1, &rx_data, 1, 10) == HAL_OK)
-    {
-        now_ms = HAL_GetTick();
-        RobotMotion_InputByte(
-            &robot_motion,
-            rx_data,
-            now_ms
-        );
-    }
+    RobotDispatcher_SetTime(
+        &robot_dispatcher,
+        now_ms
+    );
+    (void)RobotTransport_Poll(
+        &robot_transport
+    );
 
     RobotMotion_Process(
         &robot_motion,
@@ -371,6 +425,37 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void HAL_UART_RxCpltCallback(
+    UART_HandleTypeDef *huart
+)
+{
+    if (
+        huart != NULL &&
+        huart->Instance == USART1
+    )
+    {
+        RobotTransport_OnRxCompleteFromIsr(
+            &robot_transport
+        );
+    }
+}
+
+
+void HAL_UART_ErrorCallback(
+    UART_HandleTypeDef *huart
+)
+{
+    if (
+        huart != NULL &&
+        huart->Instance == USART1
+    )
+    {
+        RobotTransport_OnErrorFromIsr(
+            &robot_transport
+        );
+    }
+}
 
 /* USER CODE END 4 */
 

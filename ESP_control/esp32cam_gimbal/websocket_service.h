@@ -4,14 +4,10 @@
 
 
 /*
- * 在现有 HTTP 服务器中注册：
+ * Wire the WebSocket transport, bounded network TX queue, V1 router, local
+ * services, and STM32 link, then register /ws on the existing HTTP server.
  *
- * WebSocket /ws
- *
- * 每个二进制 WebSocket 帧承载一条完整
- * V1 应用消息。
- *
- * ws://ESP32_IP/ws
+ * This coordinator does not parse WebSocket frames or Protocol V1 itself.
  */
 bool websocketServiceRegister(
     httpd_handle_t server
@@ -19,8 +15,13 @@ bool websocketServiceRegister(
 
 
 /*
- * 当前是否存在仍由 HTTP 服务器识别为 WebSocket 的 Linux 客户端。
- *
- * UDP 发现服务使用这个状态：连接建立后暂停广播，断开后恢复。
+ * Return whether the transport still owns a live Linux WebSocket client.
+ * UDP discovery uses this state to pause and resume announcements.
  */
 bool websocketServiceHasClient();
+
+
+/*
+ * Drain at most one queue-owned network message from the Arduino loop.
+ */
+void websocketServicePoll();

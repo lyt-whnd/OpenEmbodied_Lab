@@ -3,128 +3,58 @@
 #include <Arduino.h>
 
 #include "app_config.h"
-#include "protocol_v1.h"
 #include "uart_framing.h"
+#include "uart_stream_framer.h"
 
 
 namespace
 {
 
 /*
- * UART0 被下载底座和 Serial 调试占用。
- *
- * 这里使用 UART1 与 STM32 通信，
- * 并将 UART1 映射到 GPIO13 和 GPIO14。
+ * UART0 is occupied by flashing and Serial diagnostics. UART1 is mapped to
+ * GPIO13/GPIO14 for the STM32 link.
  */
 HardwareSerial stm32Serial(1);
 
-bool uartInitialized = false;
-bool discardUntilDelimiter = false;
-
-Stm32UartMessageCallback messageCallback =
+bool transportInitialized = false;
+Stm32TransportReceiveCallback receiveCallback =
     nullptr;
-
-uint8_t encodedReceiveBuffer[
-    UartFraming::MAX_COBS_FRAME_SIZE
-];
-
-size_t encodedReceiveLength = 0;
+UartStreamFramer::Receiver streamReceiver;
 
 
-void processEncodedFrame()
+void processEncodedFrame(
+    const uint8_t *encodedData,
+    size_t encodedLength
+)
 {
-    uint8_t message[
-        ProtocolV1::MAX_MESSAGE_SIZE
+    uint8_t applicationData[
+        UartFraming::MAX_APPLICATION_FRAME_SIZE
     ] = {};
+    size_t applicationLength = 0;
 
-    size_t messageLength = 0;
-
-    const UartFraming::DecodeStatus frameStatus =
+    const UartFraming::DecodeStatus status =
         UartFraming::decodeApplicationFrame(
-            encodedReceiveBuffer,
-            encodedReceiveLength,
-            message,
-            sizeof(message),
-            messageLength
+            encodedData,
+            encodedLength,
+            applicationData,
+            sizeof(applicationData),
+            applicationLength
         );
 
-    if (frameStatus != UartFraming::DecodeStatus::OK)
+    if (status != UartFraming::DecodeStatus::OK)
     {
         Serial.printf(
-            "STM32 RX frame rejected: %s\n",
-            UartFraming::decodeStatusName(
-                frameStatus
-            )
+            "STM32 transport frame rejected: %s\n",
+            UartFraming::decodeStatusName(status)
         );
-
         return;
     }
 
-    ProtocolV1::MessageView view = {};
-
-    const ProtocolV1::DecodeStatus messageStatus =
-        ProtocolV1::decodeMessage(
-            message,
-            messageLength,
-            view
-        );
-
-    if (
-        messageStatus !=
-        ProtocolV1::DecodeStatus::OK
-    )
+    if (receiveCallback != nullptr)
     {
-        Serial.printf(
-            "STM32 RX V1 message rejected: %s\n",
-            ProtocolV1::decodeStatusName(
-                messageStatus
-            )
-        );
-
-        return;
-    }
-
-    if (view.src != ProtocolV1::NODE_STM32)
-    {
-        Serial.printf(
-            "STM32 RX rejected: invalid src=0x%02X\n",
-            static_cast<unsigned int>(view.src)
-        );
-
-        return;
-    }
-
-    if (
-        view.dst != ProtocolV1::NODE_LINUX &&
-        view.dst != ProtocolV1::NODE_ESP32 &&
-        view.dst != ProtocolV1::NODE_BROADCAST
-    )
-    {
-        Serial.printf(
-            "STM32 RX rejected: invalid dst=0x%02X\n",
-            static_cast<unsigned int>(view.dst)
-        );
-
-        return;
-    }
-
-    Serial.printf(
-        "STM32 RX V1: seq=%u, "
-        "service=0x%02X, opcode=0x%02X, "
-        "payload=%u\n",
-        static_cast<unsigned int>(view.seq),
-        static_cast<unsigned int>(view.service),
-        static_cast<unsigned int>(view.opcode),
-        static_cast<unsigned int>(
-            view.payloadLength
-        )
-    );
-
-    if (messageCallback != nullptr)
-    {
-        messageCallback(
-            message,
-            messageLength
+        receiveCallback(
+            applicationData,
+            applicationLength
         );
     }
 }
@@ -132,7 +62,7 @@ void processEncodedFrame()
 }
 
 
-bool stm32UartInit()
+bool stm32TransportInit()
 {
     stm32Serial.begin(
         AppConfig::Stm32Uart::BAUD_RATE,
@@ -141,12 +71,11 @@ bool stm32UartInit()
         AppConfig::Stm32Uart::TX_PIN
     );
 
-    encodedReceiveLength = 0;
-    discardUntilDelimiter = false;
-    uartInitialized = true;
+    streamReceiver.reset();
+    transportInitialized = true;
 
     Serial.println();
-    Serial.println("STM32 V1 UART initialized");
+    Serial.println("STM32 UART transport initialized");
 
     Serial.printf(
         "STM32 UART: baud=%u, RX=%d, TX=%d\n",
@@ -161,56 +90,35 @@ bool stm32UartInit()
 }
 
 
-void stm32UartSetMessageCallback(
-    Stm32UartMessageCallback callback
+void stm32TransportSetReceiveCallback(
+    Stm32TransportReceiveCallback callback
 )
 {
-    messageCallback = callback;
+    receiveCallback = callback;
 }
 
 
-bool stm32UartSendApplicationMessage(
-    const uint8_t *message,
+bool stm32TransportSend(
+    const uint8_t *data,
     size_t length
 )
 {
-    if (!uartInitialized)
+    if (!transportInitialized)
     {
         Serial.println(
-            "STM32 UART is not initialized"
+            "STM32 UART transport is not initialized"
         );
-
-        return false;
-    }
-
-    ProtocolV1::MessageView view = {};
-
-    const ProtocolV1::DecodeStatus status =
-        ProtocolV1::decodeMessage(
-            message,
-            length,
-            view
-        );
-
-    if (status != ProtocolV1::DecodeStatus::OK)
-    {
-        Serial.printf(
-            "STM32 TX rejected invalid V1 message: %s\n",
-            ProtocolV1::decodeStatusName(status)
-        );
-
         return false;
     }
 
     uint8_t wireFrame[
         UartFraming::MAX_WIRE_FRAME_SIZE
     ] = {};
-
     size_t wireLength = 0;
 
     if (
         !UartFraming::encodeApplicationFrame(
-            message,
+            data,
             length,
             wireFrame,
             sizeof(wireFrame),
@@ -219,9 +127,8 @@ bool stm32UartSendApplicationMessage(
     )
     {
         Serial.println(
-            "STM32 TX frame encoding failed"
+            "STM32 transport frame encoding failed"
         );
-
         return false;
     }
 
@@ -234,7 +141,7 @@ bool stm32UartSendApplicationMessage(
     if (bytesWritten != wireLength)
     {
         Serial.printf(
-            "STM32 TX incomplete: %u/%u bytes\n",
+            "STM32 transport TX incomplete: %u/%u bytes\n",
             static_cast<unsigned int>(
                 bytesWritten
             ),
@@ -242,17 +149,11 @@ bool stm32UartSendApplicationMessage(
                 wireLength
             )
         );
-
         return false;
     }
 
     Serial.printf(
-        "STM32 TX V1: seq=%u, "
-        "service=0x%02X, opcode=0x%02X, "
-        "wire=%u bytes\n",
-        static_cast<unsigned int>(view.seq),
-        static_cast<unsigned int>(view.service),
-        static_cast<unsigned int>(view.opcode),
+        "STM32 transport TX: wire=%u bytes\n",
         static_cast<unsigned int>(wireLength)
     );
 
@@ -260,9 +161,9 @@ bool stm32UartSendApplicationMessage(
 }
 
 
-void stm32UartPoll()
+void stm32TransportPoll()
 {
-    if (!uartInitialized)
+    if (!transportInitialized)
     {
         return;
     }
@@ -273,48 +174,33 @@ void stm32UartPoll()
             static_cast<uint8_t>(
                 stm32Serial.read()
             );
+        UartStreamFramer::FrameView frame = {};
 
-        if (value == 0U)
-        {
-            if (discardUntilDelimiter)
-            {
-                discardUntilDelimiter = false;
-                encodedReceiveLength = 0;
-                continue;
-            }
-
-            if (encodedReceiveLength > 0U)
-            {
-                processEncodedFrame();
-                encodedReceiveLength = 0;
-            }
-
-            continue;
-        }
-
-        if (discardUntilDelimiter)
-        {
-            continue;
-        }
+        const UartStreamFramer::PushStatus status =
+            streamReceiver.push(
+                value,
+                frame
+            );
 
         if (
-            encodedReceiveLength >=
-            sizeof(encodedReceiveBuffer)
+            status ==
+            UartStreamFramer::PushStatus::FRAME_READY
+        )
+        {
+            processEncodedFrame(
+                frame.data,
+                frame.length
+            );
+        }
+        else if (
+            status ==
+            UartStreamFramer::PushStatus::FRAME_TOO_LONG
         )
         {
             Serial.println(
-                "STM32 RX frame too long, discarded"
+                "STM32 transport frame too long, "
+                "discarding until delimiter"
             );
-
-            encodedReceiveLength = 0;
-            discardUntilDelimiter = true;
-            continue;
         }
-
-        encodedReceiveBuffer[
-            encodedReceiveLength
-        ] = value;
-
-        encodedReceiveLength++;
     }
 }

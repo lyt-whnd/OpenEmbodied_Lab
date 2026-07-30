@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "protocolVersion": 1,
+  "headerSize": 10,
+  "maxPayloadSize": 256,
+  "knownFlagsMask": 15,
+  "flags": {
+    "ACK_REQUIRED": 1,
+    "RESPONSE": 2,
+    "ERROR": 4,
+    "REALTIME": 8
+  },
+  "nodes": {
+    "LINUX": 1,
+    "ESP32": 2,
+    "STM32": 3,
+    "BROADCAST": 255
+  },
+  "services": {
+    "SYSTEM": 1,
+    "MOTION": 16,
+    "TELEMETRY": 32,
+    "CONFIG": 48,
+    "EVENT": 64,
+    "OTA": 80
+  },
+  "systemOpcodes": {
+    "PING": 1,
+    "PONG": 2
+  },
+  "motionOpcodes": {
+    "MOVE": 1,
+    "STOP": 2,
+    "CENTER": 3,
+    "ESTOP": 4,
+    "CLEAR_ESTOP": 5,
+    "STATE": 16
+  },
+  "validMessages": [
+    {
+      "name": "linux_motion_move",
+      "version": 1,
+      "flags": 8,
+      "src": 1,
+      "dst": 3,
+      "service": 16,
+      "opcode": 1,
+      "seq": 4660,
+      "payloadHex": "02002c019600d4fec8000000",
+      "messageHex": "01080103100134120c0002002c019600d4fec8000000"
+    },
+    {
+      "name": "esp32_system_pong",
+      "version": 1,
+      "flags": 2,
+      "src": 2,
+      "dst": 1,
+      "service": 1,
+      "opcode": 2,
+      "seq": 4660,
+      "payloadHex": "",
+      "messageHex": "01020201010234120000"
+    },
+    {
+      "name": "stm32_telemetry_sample",
+      "version": 1,
+      "flags": 0,
+      "src": 3,
+      "dst": 1,
+      "service": 32,
+      "opcode": 1,
+      "seq": 0,
+      "payloadHex": "3412",
+      "messageHex": "010003012001000002003412"
+    },
+    {
+      "name": "maximum_payload",
+      "version": 1,
+      "flags": 8,
+      "src": 1,
+      "dst": 3,
+      "service": 80,
+      "opcode": 2,
+      "seq": 65535,
+      "payloadHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "messageHex": "010801035002ffff0001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+    }
+  ],
+  "invalidMessages": [
+    {
+      "name": "header_too_short",
+      "messageHex": "010000000000000000",
+      "expectedError": "HEADER_TOO_SHORT"
+    },
+    {
+      "name": "unsupported_version",
+      "messageHex": "02000103010101000000",
+      "expectedError": "UNSUPPORTED_VERSION"
+    },
+    {
+      "name": "unknown_flags",
+      "messageHex": "01100103010101000000",
+      "expectedError": "UNKNOWN_FLAGS"
+    },
+    {
+      "name": "payload_too_large",
+      "messageHex": "01000103500201000101",
+      "expectedError": "PAYLOAD_TOO_LARGE"
+    },
+    {
+      "name": "length_mismatch_short",
+      "messageHex": "0100010310010100020001",
+      "expectedError": "LENGTH_MISMATCH"
+    },
+    {
+      "name": "length_mismatch_extra",
+      "messageHex": "01000103100101000000ff",
+      "expectedError": "LENGTH_MISMATCH"
+    }
+  ],
+  "crcVectors": [
+    {
+      "name": "crc16_ccitt_false_123456789",
+      "dataHex": "313233343536373839",
+      "expected": 10673
+    }
+  ]
+}

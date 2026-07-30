@@ -28,10 +28,12 @@ typedef void (*RobotMotionServoHandler)(
 );
 
 
+/*
+ * Motion owns only deterministic motion state and hardware application.
+ * Protocol framing, message dispatch, and response transmission live outside.
+ */
 typedef struct
 {
-    RobotProtocolContext protocol;
-    RobotProtocolTransmitHandler transmit_handler;
     RobotMotionServoHandler servo_handler;
     void *user_context;
 
@@ -61,28 +63,25 @@ typedef struct
 
 void RobotMotion_Init(
     RobotMotionController *controller,
-    RobotProtocolTransmitHandler transmit_handler,
     RobotMotionServoHandler servo_handler,
     void *user_context,
     uint32_t now_ms
 );
 
 
-void RobotMotion_InputByte(
+/*
+ * Handle one already decoded MOTION message and return its application result.
+ * This function never frames, transmits, or dispatches a protocol message.
+ */
+RobotStatusCode RobotMotion_HandleMessage(
     RobotMotionController *controller,
-    uint8_t byte,
-    uint32_t now_ms
+    const RobotProtocolMessage *message
 );
 
 
 void RobotMotion_Process(
     RobotMotionController *controller,
     uint32_t now_ms
-);
-
-
-RobotProtocolContext *RobotMotion_GetProtocol(
-    RobotMotionController *controller
 );
 
 

@@ -1,19 +1,106 @@
 """Unit tests for the transport-independent V1 protocol codec."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from vision_demo.protocol_v1 import (
+    APPLICATION_HEADER_SIZE,
     ApplicationMessage,
+    KNOWN_FLAGS_MASK,
     MAX_PAYLOAD_SIZE,
     MessageFlag,
     MotionMovePayload,
     MotionOpcode,
     NodeId,
+    PROTOCOL_VERSION,
     ProtocolError,
     SequenceGenerator,
     ServiceId,
     SystemOpcode,
 )
+
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+_VECTOR_FILE = (
+    _REPOSITORY_ROOT
+    / 'protocol_test_vectors'
+    / 'v1_vectors.json'
+)
+_VECTORS = json.loads(_VECTOR_FILE.read_text(encoding='utf-8'))
+_ERROR_PATTERNS = {
+    'HEADER_TOO_SHORT': 'shorter',
+    'UNSUPPORTED_VERSION': 'unsupported',
+    'UNKNOWN_FLAGS': 'unknown message flags',
+    'PAYLOAD_TOO_LARGE': 'exceeds',
+    'LENGTH_MISMATCH': 'payload_len',
+}
+
+
+def test_canonical_registry_constants():
+    """Python registry values must match the canonical vector source."""
+    assert PROTOCOL_VERSION == _VECTORS['protocolVersion']
+    assert APPLICATION_HEADER_SIZE == _VECTORS['headerSize']
+    assert MAX_PAYLOAD_SIZE == _VECTORS['maxPayloadSize']
+    assert KNOWN_FLAGS_MASK == _VECTORS['knownFlagsMask']
+    assert {
+        name: int(getattr(MessageFlag, name))
+        for name in _VECTORS['flags']
+    } == _VECTORS['flags']
+    assert {
+        name: int(getattr(NodeId, name))
+        for name in _VECTORS['nodes']
+    } == _VECTORS['nodes']
+    assert {
+        name: int(getattr(ServiceId, name))
+        for name in _VECTORS['services']
+    } == _VECTORS['services']
+    assert {
+        name: int(getattr(SystemOpcode, name))
+        for name in _VECTORS['systemOpcodes']
+    } == _VECTORS['systemOpcodes']
+    assert {
+        name: int(getattr(MotionOpcode, name))
+        for name in _VECTORS['motionOpcodes']
+    } == _VECTORS['motionOpcodes']
+
+
+@pytest.mark.parametrize(
+    'vector',
+    _VECTORS['validMessages'],
+    ids=lambda vector: vector['name'],
+)
+def test_canonical_valid_message_vectors(vector):
+    """Every canonical V1 vector must decode and encode identically."""
+    packet = bytes.fromhex(vector['messageHex'])
+    message = ApplicationMessage.decode(packet)
+
+    assert message.version == vector['version']
+    assert message.flags == vector['flags']
+    assert message.src == vector['src']
+    assert message.dst == vector['dst']
+    assert message.service == vector['service']
+    assert message.opcode == vector['opcode']
+    assert message.seq == vector['seq']
+    assert message.payload == bytes.fromhex(vector['payloadHex'])
+    assert message.encode() == packet
+
+
+@pytest.mark.parametrize(
+    'vector',
+    _VECTORS['invalidMessages'],
+    ids=lambda vector: vector['name'],
+)
+def test_canonical_invalid_message_vectors(vector):
+    """Every canonical malformed V1 vector must be rejected."""
+    packet = bytes.fromhex(vector['messageHex'])
+
+    with pytest.raises(
+        ProtocolError,
+        match=_ERROR_PATTERNS[vector['expectedError']],
+    ):
+        ApplicationMessage.decode(packet)
 
 
 def test_known_motion_message_vector():
@@ -120,6 +207,24 @@ def test_encode_rejects_oversized_payload():
     with pytest.raises(
         ProtocolError,
         match='exceeds',
+    ):
+        message.encode()
+
+
+def test_encode_rejects_unknown_flags():
+    """Python must reject the same unknown flag bits as C and C++."""
+    message = ApplicationMessage(
+        flags=KNOWN_FLAGS_MASK | 0x10,
+        src=int(NodeId.LINUX),
+        dst=int(NodeId.ESP32),
+        service=int(ServiceId.SYSTEM),
+        opcode=1,
+        seq=1,
+    )
+
+    with pytest.raises(
+        ProtocolError,
+        match='unknown message flags',
     ):
         message.encode()
 

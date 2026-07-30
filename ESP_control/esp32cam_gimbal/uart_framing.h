@@ -3,15 +3,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "protocol_v1.h"
+#include "transport_limits.h"
 
 
 namespace UartFraming
 {
 
 static constexpr size_t CRC_SIZE = 2;
+static constexpr size_t MAX_APPLICATION_FRAME_SIZE =
+    TransportLimits::MAX_OPAQUE_FRAME_SIZE;
 static constexpr size_t MAX_RAW_FRAME_SIZE =
-    ProtocolV1::MAX_MESSAGE_SIZE + CRC_SIZE;
+    MAX_APPLICATION_FRAME_SIZE + CRC_SIZE;
 static constexpr size_t MAX_COBS_FRAME_SIZE =
     MAX_RAW_FRAME_SIZE +
     (MAX_RAW_FRAME_SIZE / 254U) +
