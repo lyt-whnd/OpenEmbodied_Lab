@@ -14,7 +14,7 @@ This branch develops a Wi-Fi-based active vision gimbal using:
 
 - ESP32-CAM with OV3660 camera
 - ROS 2 Jazzy
-- OpenCV target detection
+- OpenCV color tracking and PyTorch YOLOv5n target detection
 - WebSocket control
 - STM32 servo control
 - Two-axis servo gimbal
@@ -30,7 +30,7 @@ esp32_camera_node
         │
         │ /image_raw
         ▼
-OpenCV Target Detection
+YOLOv5n Target Detection
         │
         │ /target_position
         ▼
@@ -304,6 +304,9 @@ back to Linux. The former newline text UART format is no longer used.
 - ROS 2 ESP32-CAM stream receiver
 - ROS 2 image topic publication
 - OpenCV target detection
+- PyTorch YOLOv5n person detection
+- Latest-frame-only inference pipeline
+- YOLOv5 annotated image publication
 - Target center offset calculation
 - PD gimbal controller
 - Linux V1 application protocol codec
@@ -326,9 +329,7 @@ back to Linux. The former newline text UART format is no longer used.
 ### In Progress
 
 - Linux ACK reception, timeout, and retry handling
-- YOLO target detection
 - RK3568 deployment
-- Low-latency frame processing
 - Mobile robot integration
 
 ---
@@ -341,6 +342,8 @@ back to Linux. The former newline text UART format is no longer used.
 - ROS 2 Jazzy
 - Python 3
 - OpenCV
+- PyTorch
+- YOLOv5n v7.0
 - cv_bridge
 - websocket-client
 - colcon
@@ -390,6 +393,15 @@ OpenEmbodied_Lab/
 │       │   ├── test_protocol_v1.py
 │       │   ├── test_esp32_discovery.py
 │       │   └── test_keyboard_motion.py
+│       ├── package.xml
+│       └── setup.py
+│   └── yolov5_detector/
+│       ├── config/yolov5n.yaml
+│       ├── launch/esp32_yolov5.launch.py
+│       ├── yolov5_detector/
+│       │   ├── detector_node.py
+│       │   └── target_selection.py
+│       ├── weights/yolov5n.pt
 │       ├── package.xml
 │       └── setup.py
 ├── ESP_control/
@@ -760,12 +772,12 @@ Load the workspace environment:
 source install/setup.bash
 ```
 
-To build only the vision package:
+To build the vision and YOLOv5 packages:
 
 ```bash
 colcon build \
   --symlink-install \
-  --packages-select vision_demo
+  --packages-select vision_demo yolov5_detector
 ```
 
 When package files, entry points, or launch files have changed, clean the package before rebuilding:
@@ -886,14 +898,25 @@ The image viewer should display the ESP32-CAM video received through ROS 2.
 
 ## Run Target Detection
 
-Start the target detection node:
+Start the PyTorch YOLOv5n detector. It subscribes to `/image_raw` and publishes
+the same `/target_position` interface used by the existing gimbal controller:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 
-ros2 run vision_demo color_tracker
+ros2 run yolov5_detector yolov5_detector
 ```
+
+The default target class is `person`. It can be changed to any COCO class:
+
+```bash
+ros2 run yolov5_detector yolov5_detector \
+  --ros-args -p target_class:=bottle
+```
+
+Annotated detection images are published on `/yolov5/annotated`. The original
+OpenCV color tracker remains available as `ros2 run vision_demo color_tracker`.
 
 Check the target-position output:
 
@@ -1008,14 +1031,16 @@ After editing `esp32_wifi.yaml`, start all nodes with:
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 
-ros2 launch vision_demo esp32_wifi.launch.py
+ros2 launch yolov5_detector esp32_yolov5.launch.py
 ```
 
 The launch file starts:
 
 ```text
 esp32_camera_node
-color_tracker_node
+yolov5_detector_node
+robot_link_node
+sensor_bridge_node
 gimbal_pd_websocket_node
 ```
 
@@ -1030,7 +1055,9 @@ Expected nodes:
 
 ```text
 /esp32_camera_node
-/color_tracker_node
+/yolov5_detector_node
+/robot_link_node
+/sensor_bridge_node
 /gimbal_pd_websocket_node
 ```
 
@@ -1039,6 +1066,7 @@ Expected topics include:
 ```text
 /image_raw
 /target_position
+/yolov5/annotated
 ```
 
 ---
@@ -1174,6 +1202,9 @@ Then log out and log back in.
 - [x] ROS 2 workspace
 - [x] USB camera prototype
 - [x] OpenCV target detection
+- [x] PyTorch YOLOv5n detection node
+- [x] Latest-frame-only YOLOv5 inference pipeline
+- [x] YOLOv5 annotated image topic
 - [x] Target center offset calculation
 - [x] PD tracking controller
 - [x] STM32 serial protocol
@@ -1206,8 +1237,6 @@ Then log out and log back in.
 - [x] ESP32 V1 UART routing
 - [ ] Linux ACK receive, timeout, and retry
 - [ ] Complete Wi-Fi gimbal control loop
-- [ ] YOLO detection node
-- [ ] Latest-frame-only inference pipeline
 - [ ] RK3568 deployment
 - [ ] ROS 2 launch and parameter optimization
 - [ ] IMU integration

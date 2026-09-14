@@ -1,0 +1,21 @@
+yolov5_detector_node:
+  ros__parameters:
+    image_topic: "/image_raw"
+    target_topic: "/target_position"
+    annotated_topic: "/yolov5/annotated"
+
+    repo_path: "~/robot_ws/src/yolov5_detector/vendor/yolov5"
+    model_path: "~/robot_ws/src/yolov5_detector/weights/yolov5n.pt"
+    device: "cpu"
+
+    # COCO class name or numeric class id. Use "all" for every class.
+    target_class: "person"
+    selection_strategy: "largest"
+    confidence_threshold: 0.35
+    iou_threshold: 0.45
+    image_size: 320
+    max_detections: 20
+    torch_num_threads: 2
+
+    publish_annotated: true
+    log_period_sec: 2.0

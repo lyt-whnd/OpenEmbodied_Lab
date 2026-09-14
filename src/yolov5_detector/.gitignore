@@ -1,0 +1,3 @@
+vendor/
+weights/*.pt
+weights/*.pth
