@@ -30,7 +30,26 @@ OpenEmbodied_Lab 是一个面向机器人、嵌入式系统与具身智能的开
 2. **控制链路：** PD 控制器根据图像中心偏差生成 yaw/pitch 控制量，并封装为 V1 `MOTION/MOVE` 消息，通过 WebSocket 发送至 ESP32-CAM。
 3. **实时执行链路：** ESP32-CAM 将 V1 消息封装为 `COBS(V1 + CRC16) + 0x00` 串口帧；STM32 完成校验、安全检查和 PWM 输出，并沿原链路回传执行结果与遥测状态。
 
-> 图中的 INMP441、音频和其他外设表示预留扩展方向；当前已完成的功能以“功能状态”和“开发计划”章节为准。RK3568 部署仍在进行中，现有 ROS 2 节点已在 Linux 环境完成联调。
+> 图中的 INMP441、音频和其他外设表示预留扩展方向；当前已完成的功能以“功能状态”和“开发计划”章节为准。仓库保留可直接运行的 PyTorch 检测路径；RKNN INT8 实机部署已经完成，相关模型产物与原始测试日志尚未随源码发布。
+
+## 自研 STM32 机器人控制板
+
+<p align="center">
+  <img src="docs/stm32-robot-control-board-pcb.jpg" width="100%" alt="自研 robot_v1 STM32 机器人控制板 PCB 布局图">
+</p>
+
+为减少通用开发板和外接模块带来的接线复杂度，独立完成 `robot_v1` STM32 控制板的原理图与 PCB 设计。板上集成系统与舵机供电、USB/串口通信、SWD 调试、多路 PWM，以及 I²C、SPI 和 GPIO 扩展接口，并预留 MPU6050、OLED、语音模块与 ESP 模块连接。该板用于承载 V1 协议解析、安全检查、双舵机实时控制及后续底盘外设扩展。
+
+## 性能验证摘要
+
+| 验证项 | 实机结果 |
+|---|---|
+| 视觉闭环控制 | 稳定时间由 1.65 s 降至 1.12 s，稳态中心误差由 12.3 px 降至 5.6 px |
+| 可靠通信 | 10% 应用层丢包注入下，关键命令最终送达率 99.99%；Latest 策略将积压时延由 240 ms 降至 65 ms |
+| RKNN INT8 部署 | mAP@0.5 由 92.6% 降至 91.7%，NPU 纯推理 15 ms，单帧视觉处理 42 ms |
+| 端到端链路 | ESP32-CAM 采集至 STM32 执行的 P95 时延为 96 ms |
+
+测试范围、统计定义及结果边界见 [性能验证记录](docs/performance-validation.md)。
 
 ## 功能状态
 
@@ -41,6 +60,7 @@ OpenEmbodied_Lab 是一个面向机器人、嵌入式系统与具身智能的开
 - [x] ROS 2 ESP32-CAM 图像接收及 `/image_raw` 发布
 - [x] OpenCV 颜色目标检测
 - [x] PyTorch YOLOv5n 人体检测与最新帧推理
+- [x] YOLOv5n-Face ONNX FP32 至 RKNN INT8 转换、量化验证与 RK3568 NPU 部署
 - [x] `/yolov5/annotated` 检测结果图像发布
 - [x] 目标中心偏差计算与 PD 云台控制
 - [x] Linux、ESP32、STM32 三端 V1 协议编解码
@@ -51,11 +71,11 @@ OpenEmbodied_Lab 是一个面向机器人、嵌入式系统与具身智能的开
 - [x] NVS 多 Wi-Fi 配置、SoftAP 配网和断线重连
 - [x] ESP32 UDP 设备发现与 Linux 发现节点
 - [x] Linux 键盘控制和随机运动测试节点
+- [x] Linux ACK 接收、超时重传、重复响应处理与分级发送调度
 
 ### 进行中
 
-- [ ] Linux ACK 接收、超时与自动重传
-- [ ] RK3568 实机部署
+- [ ] RKNN 部署脚本、模型产物与原始性能日志公开同步
 - [ ] 完整机器人底盘集成
 - [ ] INMP441 音频采集与声音感知
 
