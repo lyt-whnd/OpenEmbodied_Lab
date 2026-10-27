@@ -1,132 +1,104 @@
 # OpenEmbodied_Lab
 
-OpenEmbodied_Lab is an open-source laboratory for robotics, embedded systems, and embodied AI.
+OpenEmbodied_Lab 是一个面向机器人、嵌入式系统与具身智能的开源实验项目，覆盖 ROS 2、Embedded Linux、STM32、ESP32、RK3568、计算机视觉及机器人控制。
 
-This repository documents the development of ROS 2, Embedded Linux, STM32, RK3568, PCB design, computer vision, and embodied robotic systems.
+## 当前项目
 
----
+### ROS 2 ESP32-CAM 主动视觉云台
 
-## Current Project
+本项目基于 **RK3568 + ESP32-CAM + STM32F103** 构建无线主动视觉云台：ESP32-CAM 负责图像采集与无线网关，RK3568/Linux 负责 ROS 2 视觉感知和控制量计算，STM32 负责协议解析、安全检查及双舵机实时控制。
 
-### ROS 2 ESP32-CAM Active Vision Gimbal
+主要能力：
 
-This branch develops a Wi-Fi-based active vision gimbal using:
+- OV3660 图像采集与 HTTP MJPEG 视频流
+- ROS 2 图像发布、OpenCV 颜色跟踪与 YOLOv5n 目标检测
+- 基于图像位置误差的 PD 云台控制
+- Linux、ESP32 与 STM32 共用的 V1 轻量应用层协议
+- WebSocket/TCP 网络控制与 COBS + CRC16 串口帧传输
+- Wi-Fi 自动连接、SoftAP 配网、断线重连与 UDP 设备发现
+- STM32 指令超时、重复包过滤、ESTOP 与 PWM 舵机控制
 
-- ESP32-CAM with OV3660 camera
-- ROS 2 Jazzy
-- OpenCV color tracking and PyTorch YOLOv5n target detection
-- WebSocket control
-- STM32 servo control
-- Two-axis servo gimbal
+## 系统架构
 
-Current architecture:
+<p align="center">
+  <img src="docs/robot-system-architecture.png" width="100%" alt="RK3568、ESP32-CAM 与 STM32 主动视觉机器人系统架构图">
+</p>
 
-```text
-ESP32-CAM / OV3660
-        │
-        │ HTTP MJPEG stream
-        ▼
-esp32_camera_node
-        │
-        │ /image_raw
-        ▼
-YOLOv5n Target Detection
-        │
-        │ /target_position
-        ▼
-PD Controller
-        │
-        │ WebSocket V1 binary message
-        ▼
-ESP32-CAM
-        │
-        │ UART
-        ▼
-STM32
-        │
-        │ PWM
-        ▼
-Two-axis Servo Gimbal
-```
+系统包含三条主要链路：
 
-The previous USB-camera and direct-serial implementation is preserved separately.
+1. **视觉链路：** OV3660 采集 JPEG 图像，ESP32-CAM 通过 HTTP MJPEG 发送至 RK3568；ROS 2 发布 `/image_raw`，YOLOv5n/OpenCV 输出目标中心坐标。
+2. **控制链路：** PD 控制器根据图像中心偏差生成 yaw/pitch 控制量，并封装为 V1 `MOTION/MOVE` 消息，通过 WebSocket 发送至 ESP32-CAM。
+3. **实时执行链路：** ESP32-CAM 将 V1 消息封装为 `COBS(V1 + CRC16) + 0x00` 串口帧；STM32 完成校验、安全检查和 PWM 输出，并沿原链路回传执行结果与遥测状态。
 
----
+> 图中的 INMP441、音频和其他外设表示预留扩展方向；当前已完成的功能以“功能状态”和“开发计划”章节为准。RK3568 部署仍在进行中，现有 ROS 2 节点已在 Linux 环境完成联调。
 
-## ESP32-CAM Network Interfaces
+## 功能状态
 
-The ESP32-CAM firmware currently provides the following interfaces:
+### 已完成
 
-```text
-UDP <broadcast>:4210
-```
+- [x] ESP32-CAM OV3660 初始化、PSRAM 检测与 JPEG 采集
+- [x] HTTP 单帧抓取与 MJPEG 视频流
+- [x] ROS 2 ESP32-CAM 图像接收及 `/image_raw` 发布
+- [x] OpenCV 颜色目标检测
+- [x] PyTorch YOLOv5n 人体检测与最新帧推理
+- [x] `/yolov5/annotated` 检测结果图像发布
+- [x] 目标中心偏差计算与 PD 云台控制
+- [x] Linux、ESP32、STM32 三端 V1 协议编解码
+- [x] Binary WebSocket 运动控制与 ESP32 消息路由
+- [x] ESP32 ↔ STM32 的 COBS 分帧与 CRC16 校验
+- [x] STM32 MOVE 超时、序列号过滤和运动安全处理
+- [x] STM32 定时器 PWM 双舵机控制
+- [x] NVS 多 Wi-Fi 配置、SoftAP 配网和断线重连
+- [x] ESP32 UDP 设备发现与 Linux 发现节点
+- [x] Linux 键盘控制和随机运动测试节点
 
-Automatic device and endpoint discovery.
+### 进行中
 
-```text
-http://<ESP32_IP>/
-```
+- [ ] Linux ACK 接收、超时与自动重传
+- [ ] RK3568 实机部署
+- [ ] 完整机器人底盘集成
+- [ ] INMP441 音频采集与声音感知
 
-Camera test page.
+## ESP32-CAM 网络接口
 
-```text
-http://<ESP32_IP>/capture
-```
+| 功能 | 地址 | 说明 |
+|---|---|---|
+| UDP 设备发现 | `<broadcast>:4210` | 自动发现设备及服务端点 |
+| 摄像头测试页 | `http://<ESP32_IP>/` | 浏览器测试页面 |
+| 单帧抓拍 | `http://<ESP32_IP>/capture` | 返回一张 JPEG |
+| MJPEG 视频流 | `http://<ESP32_IP>:81/stream` | 连续图像流 |
+| V1 控制接口 | `ws://<ESP32_IP>/ws` | Binary WebSocket 消息 |
 
-Capture one JPEG image.
+视频流和控制流相互独立：图像使用 HTTP MJPEG，控制及遥测使用 WebSocket。
 
-```text
-http://<ESP32_IP>:81/stream
-```
+### Wi-Fi 配网
 
-Continuous MJPEG video stream.
-
-The control interface is designed as:
+Wi-Fi 账号不会硬编码在固件中。ESP32 使用 NVS 保存最多 5 组网络配置，启动流程如下：
 
 ```text
-ws://<ESP32_IP>/ws
-```
-
-Linux sends one complete V1 application message in each binary WebSocket
-frame. Video remains on the independent HTTP MJPEG connection.
-
-### Wi-Fi provisioning
-
-Wi-Fi credentials are not compiled into the firmware. The ESP32 stores up to
-five SSID/password profiles in NVS and uses the following boot flow:
-
-```text
-load saved profiles from NVS
+从 NVS 读取已保存网络
         ↓
-scan and try visible saved networks for up to 30 seconds
-        ↓ connected
-start HTTP, MJPEG, and WebSocket services
+扫描并尝试连接可用网络（最长 30 秒）
+        ↓ 成功
+启动 HTTP、MJPEG、WebSocket 和 UDP 发现服务
 
-        ↓ no saved network connected
-start temporary SoftAP and captive configuration page
+        ↓ 连接失败
+启动临时 SoftAP 和配网页面
         ↓
-save the submitted profile to NVS and restart
+保存网络信息到 NVS 并重启
 ```
 
-The provisioning access point is named
-`Robot_Config_<chip-id>` and uses password `robot-config`. Connect a phone or
-computer to that 2.4 GHz access point and open:
+配网热点名称为 `Robot_Config_<chip-id>`，密码为 `robot-config`。连接 2.4 GHz 热点后访问：
 
 ```text
 http://192.168.4.1/
 ```
 
-Select a scanned network or type an SSID, enter its password, and choose
-**Save and restart**. An existing SSID is updated in place. Empty slots are
-used first; after five profiles are stored, new networks replace old slots in
-round-robin order. `wifiServiceClearProfiles()` is reserved for a future
-protocol command that resets Wi-Fi provisioning.
+同名 SSID 会原位更新；空槽位优先使用，保存超过 5 组后按轮询方式覆盖旧配置。
 
-### UDP automatic discovery
+### UDP 自动发现
 
-After Wi-Fi, HTTP, MJPEG, and WebSocket startup succeeds, the ESP32 broadcasts
-one UTF-8 JSON datagram per second to the directed subnet broadcast address on
-UDP port `4210`:
+服务启动后，ESP32 每秒向 UDP `4210` 端口广播一次 UTF-8 JSON：
 
 ```json
 {
@@ -143,32 +115,15 @@ UDP port `4210`:
 }
 ```
 
-Discovery is only the connection bootstrap. V1 control and telemetry still use
-WebSocket, while camera frames remain on HTTP MJPEG. The ESP32 pauses discovery
-broadcasts as soon as a Linux WebSocket client is connected. It keeps the UDP
-socket open and immediately resumes broadcasting when that client disconnects.
+Linux 端会校验 magic、协议版本、字段、端口和路径，并使用 UDP 数据包的源 IPv4 地址生成服务 URL，从而适应 DHCP 地址变化。WebSocket 客户端连接后暂停广播，断开后立即恢复。
 
-The Linux listener validates the magic, protocol version, fields, ports, and
-paths. It deliberately builds URLs from the UDP packet's source IPv4 address
-instead of trusting the self-reported `ip` JSON field. This handles DHCP
-address changes without hard-coded addresses.
-
-After building and sourcing the ROS 2 workspace, discover one robot with:
+发现一个机器人：
 
 ```bash
 ros2 run vision_demo esp32_discovery --once --timeout 10
 ```
 
-Example output:
-
-```text
-device_id: ESP32CAM_A1B2C3
-ip:        192.168.103.42
-WebSocket: ws://192.168.103.42:80/ws
-MJPEG:     http://192.168.103.42:81/stream
-```
-
-For scripts, request one JSON result:
+输出 JSON：
 
 ```bash
 ros2 run vision_demo esp32_discovery \
@@ -177,27 +132,31 @@ ros2 run vision_demo esp32_discovery \
   --json
 ```
 
-Use `--device-id ESP32CAM_A1B2C3` when multiple robots are present. Without
-`--once`, the listener remains active and prints a device again only when its
-advertised endpoint changes.
+存在多个机器人时可增加：
 
-### V1 application message
+```text
+--device-id ESP32CAM_A1B2C3
+```
 
-The transport-independent header is exactly 10 bytes:
+## V1 轻量应用层协议
 
-| Offset | Size | Field | Encoding |
+V1 用于统一 RK3568/Linux、ESP32-CAM 与 STM32 的消息格式，解决跨设备消息语义不一致、业务耦合和命令扩展困难的问题。V1 与底层传输无关，同一条消息可以通过 WebSocket、TCP 或 UART 转发。
+
+V1 固定消息头为 10 字节：
+
+| 偏移 | 长度 | 字段 | 说明 |
 |---:|---:|---|---|
-| 0 | 1 | `version` | V1 is `0x01` |
-| 1 | 1 | `flags` | ACK, response, error, real-time |
-| 2 | 1 | `src` | Source node |
-| 3 | 1 | `dst` | Destination node |
-| 4 | 1 | `service` | System, motion, telemetry, config, event, OTA |
-| 5 | 1 | `opcode` | Operation within the service |
-| 6 | 2 | `seq` | Unsigned 16-bit, little-endian |
-| 8 | 2 | `payload_len` | Unsigned 16-bit, little-endian |
-| 10 | N | `payload` | At most 256 bytes |
+| 0 | 1 B | `version` | V1 固定为 `0x01` |
+| 1 | 1 B | `flags` | ACK、响应、错误、实时消息标志 |
+| 2 | 1 B | `src` | 源节点 ID |
+| 3 | 1 B | `dst` | 目标节点 ID |
+| 4 | 1 B | `service` | 系统、运动、遥测、配置、事件、OTA |
+| 5 | 1 B | `opcode` | Service 内的具体操作 |
+| 6 | 2 B | `seq` | 16 位无符号序列号，小端序 |
+| 8 | 2 B | `payload_len` | Payload 长度，小端序 |
+| 10 | N | `payload` | 业务数据，最大 256 字节 |
 
-Node identifiers are:
+节点 ID：
 
 ```text
 Linux     0x01
@@ -206,67 +165,47 @@ STM32     0x03
 Broadcast 0xFF
 ```
 
-The Linux implementation is:
+协议实现位置：
 
 ```text
+Linux:
 src/vision_demo/vision_demo/protocol_v1.py
-```
 
-The matching ESP32 implementation is:
-
-```text
+ESP32:
 ESP_control/esp32cam_gimbal/protocol_v1.h
 ESP_control/esp32cam_gimbal/protocol_v1.cpp
-```
 
-The STM32 transport and motion implementations are:
-
-```text
+STM32:
 stm32_control/ros2/Core/Inc/robot_protocol.h
 stm32_control/ros2/Core/Src/robot_protocol.c
 stm32_control/ros2/Core/Inc/robot_motion.h
 stm32_control/ros2/Core/Src/robot_motion.c
 ```
 
-`MOTION/MOVE` currently uses a fixed 12-byte little-endian payload:
+### MOTION/MOVE 载荷
 
-| Field | Type | Unit |
+`MOTION/MOVE` 使用固定 12 字节小端序载荷：
+
+| 字段 | 类型 | 含义/单位 |
 |---|---|---|
-| `control_epoch` | `uint16` | Control ownership generation |
-| `valid_ms` | `uint16` | Command lifetime |
-| `linear_mm_s` | `int16` | Tracked-base linear velocity |
-| `angular_mrad_s` | `int16` | Tracked-base angular velocity |
-| `head_yaw_rate_x10` | `int16` | 0.1 degree/second |
-| `head_pitch_rate_x10` | `int16` | 0.1 degree/second |
+| `control_epoch` | `uint16` | 控制权代数 |
+| `valid_ms` | `uint16` | 指令有效期 |
+| `linear_mm_s` | `int16` | 底盘线速度，mm/s |
+| `angular_mrad_s` | `int16` | 底盘角速度，mrad/s |
+| `head_yaw_rate_x10` | `int16` | yaw 角速度，0.1°/s |
+| `head_pitch_rate_x10` | `int16` | pitch 角速度，0.1°/s |
 
-The current PD node sets both tracked-base velocity fields to zero and fills
-the two head-rate fields. `MOVE` uses the real-time flag and only the newest
-pending command is retained. `STOP` uses the ACK-required flag.
-The current STM32 head controller rejects non-zero tracked-base velocity
-fields until the tracked-base actuator layer is implemented.
+当前 PD 节点将两个底盘速度字段置零，只填写云台 yaw/pitch 角速度。`MOVE` 使用实时标志，队列中只保留最新命令；`STOP` 使用需要 ACK 标志。底盘执行层完成前，STM32 会拒绝非零底盘速度。
 
-The ESP32 validates the V1 version, known flags, payload limit, exact frame
-length, source node, and destination node before routing a message. Messages
-addressed to STM32 are forwarded without changing their application header.
-Messages addressed to ESP32 currently support:
+### ESP32 与 STM32 串口分帧
 
-```text
-SYSTEM/PING  opcode 0x01
-SYSTEM/PONG  opcode 0x02
-```
-
-`PONG` keeps the request sequence number and sets the response flag.
-
-### ESP32-to-STM32 UART framing
-
-WebSocket already preserves message boundaries, while UART is a byte stream.
-The ESP32 therefore sends the same V1 application message using:
+WebSocket 自带消息边界，而 UART 是连续字节流，因此串口使用：
 
 ```text
 COBS(application_message + CRC16-CCITT-FALSE) + 0x00
 ```
 
-CRC parameters:
+CRC 参数：
 
 ```text
 polynomial: 0x1021
@@ -276,204 +215,94 @@ refout:     false
 xorout:     0x0000
 ```
 
-The CRC is appended little-endian and covers the complete V1 application
-message. The ESP32 UART receiver performs delimiter recovery, COBS decoding,
-CRC checking, V1 validation, and source/destination checking. Valid STM32
-messages addressed to Linux are returned as binary WebSocket frames. Only
-one active Linux WebSocket client is retained by the current firmware.
+CRC 以小端序追加并覆盖完整 V1 应用消息。接收端依次完成 `0x00` 分帧、COBS 解码、CRC 校验、V1 长度和地址检查，再将有效消息交给业务层。
 
-The STM32 now implements the matching stream decoder and transmitter. It drops
-oversized, malformed, wrong-destination, bad-CRC, and stale MOVE frames before
-they reach motion control. MOVE expires after `valid_ms`; STOP holds the
-current angles, CENTER returns to 90/90, and ESTOP remains latched until
-CLEAR_ESTOP. Reliable commands receive a two-byte little-endian status response
-with the original service, opcode, and sequence. The ESP32 routes that response
-back to Linux. The former newline text UART format is no longer used.
+STM32 会在运动控制前丢弃超长帧、畸形帧、错误目标、CRC 错误和过期 MOVE。`MOVE` 在 `valid_ms` 后失效；`STOP` 保持当前角度；`CENTER` 回到 90°/90°；`ESTOP` 保持锁定直至收到 `CLEAR_ESTOP`。
 
----
-
-## Features
-
-### Implemented
-
-- ESP32-CAM OV3660 initialization
-- PSRAM detection
-- JPEG image acquisition
-- HTTP single-image capture
-- MJPEG video streaming
-- ROS 2 ESP32-CAM stream receiver
-- ROS 2 image topic publication
-- OpenCV target detection
-- PyTorch YOLOv5n person detection
-- Latest-frame-only inference pipeline
-- YOLOv5 annotated image publication
-- Target center offset calculation
-- PD gimbal controller
-- Linux V1 application protocol codec
-- Binary WebSocket motion sender
-- ESP32 V1 binary WebSocket decoder
-- ESP32 V1 destination router
-- ESP32-to-STM32 COBS and CRC16 framing
-- STM32-to-Linux validated binary forwarding
-- NVS storage for five Wi-Fi profiles
-- 30-second automatic Wi-Fi selection
-- SoftAP captive Wi-Fi provisioning page
-- ESP32 UDP endpoint discovery broadcast
-- Linux validated UDP discovery listener
-- UDP broadcast pause while Linux WebSocket is connected
-- Linux interactive keyboard and random-motion test node
-- STM32 V1, COBS, and CRC16 decoder/transmitter
-- STM32 safe MOVE timeout, sequence filtering, and motion command handler
-- PWM servo control
-
-### In Progress
-
-- Linux ACK reception, timeout, and retry handling
-- RK3568 deployment
-- Mobile robot integration
-
----
-
-## Development Environment
+## 开发环境
 
 ### Linux / ROS 2
 
 - Ubuntu 24.04
 - ROS 2 Jazzy
 - Python 3
-- OpenCV
-- PyTorch
-- YOLOv5n v7.0
-- cv_bridge
-- websocket-client
-- colcon
+- OpenCV、PyTorch、YOLOv5n v7.0
+- cv_bridge、websocket-client、colcon
 
 ### ESP32
 
 - Arduino IDE 2.x
-- ESP32 Arduino Core by Espressif Systems
+- Espressif ESP32 Arduino Core
 - AI Thinker ESP32-CAM
-- OV3660 camera sensor
-- ESP32-CAM-MB download board
-- 2.4 GHz Wi-Fi
+- OV3660、PSRAM、2.4 GHz Wi-Fi
 
 ### STM32
 
 - STM32F103C8T6
-- STM32CubeMX
-- STM32 HAL
-- UART
-- TIM PWM
+- STM32CubeMX、STM32 HAL
+- UART、TIM PWM
 
----
-
-## Repository Structure
+## 目录结构
 
 ```text
 OpenEmbodied_Lab/
 ├── src/
-│   └── vision_demo/
-│       ├── config/
-│       │   └── esp32_wifi.yaml
-│       ├── launch/
-│       │   └── esp32_wifi.launch.py
-│       ├── resource/
-│       │   └── vision_demo
-│       ├── vision_demo/
-│       │   ├── __init__.py
-│       │   ├── protocol_v1.py
-│       │   ├── esp32_discovery.py
-│       │   ├── keyboard_motion_node.py
-│       │   ├── esp32_camera_node.py
-│       │   ├── color_tracker_node.py
-│       │   ├── gimbal_pd_websocket_node.py
-│       │   ├── gimbal_pd_serial_node.py
-│       │   └── image_viewer_node.py
-│       ├── test/
-│       │   ├── test_protocol_v1.py
-│       │   ├── test_esp32_discovery.py
-│       │   └── test_keyboard_motion.py
-│       ├── package.xml
-│       └── setup.py
+│   ├── vision_demo/
+│   │   ├── config/esp32_wifi.yaml
+│   │   ├── launch/esp32_wifi.launch.py
+│   │   ├── vision_demo/
+│   │   │   ├── protocol_v1.py
+│   │   │   ├── esp32_discovery.py
+│   │   │   ├── keyboard_motion_node.py
+│   │   │   ├── esp32_camera_node.py
+│   │   │   ├── color_tracker_node.py
+│   │   │   ├── gimbal_pd_websocket_node.py
+│   │   │   └── image_viewer_node.py
+│   │   └── test/
 │   └── yolov5_detector/
 │       ├── config/yolov5n.yaml
 │       ├── launch/esp32_yolov5.launch.py
 │       ├── yolov5_detector/
-│       │   ├── detector_node.py
-│       │   └── target_selection.py
-│       ├── weights/yolov5n.pt
-│       ├── package.xml
-│       └── setup.py
+│       └── weights/yolov5n.pt
 ├── ESP_control/
 │   ├── esp32cam_gimbal/
-│   │   ├── protocol_v1.h
-│   │   ├── protocol_v1.cpp
-│   │   ├── uart_framing.h
-│   │   ├── uart_framing.cpp
-│   │   ├── udp_discovery_service.h
-│   │   ├── udp_discovery_service.cpp
-│   │   ├── websocket_service.cpp
-│   │   └── stm32_uart.cpp
-│   └── tests/
-│       └── protocol_v1_host_test.cpp
+│   └── tests/protocol_v1_host_test.cpp
 ├── stm32_control/
 │   ├── ros2/Core/
-│   │   ├── Inc/
-│   │   │   ├── robot_protocol.h
-│   │   │   └── robot_motion.h
-│   │   └── Src/
-│   │       ├── robot_protocol.c
-│   │       ├── robot_motion.c
-│   │       └── main.c
-│   └── tests/
-│       └── robot_protocol_host_test.c
+│   └── tests/robot_protocol_host_test.c
+├── docs/
 ├── README.md
 └── .gitignore
 ```
 
-Generated ROS 2 directories are ignored by Git:
+`build/`、`install/` 和 `log/` 为 ROS 2 生成目录，已由 Git 忽略。
 
-```text
-build/
-install/
-log/
-```
-
----
-
-## Clone the ESP32 Wi-Fi Branch
+## 获取项目
 
 ```bash
 git clone https://github.com/lyt-whnd/OpenEmbodied_Lab.git
-
 cd OpenEmbodied_Lab
-
 git switch feature/esp32-wifi
 ```
 
-Replace `feature/esp32-wifi` if the actual branch uses a different name.
-
-Check the current branch:
+查看当前分支：
 
 ```bash
 git branch --show-current
 ```
 
----
+## 安装 ROS 2 依赖
 
-## ROS 2 Installation
-
-Add the ROS 2 environment to the current terminal:
+加载 ROS 2 环境：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 ```
 
-Install the required ROS 2 and Python packages:
+安装依赖：
 
 ```bash
 sudo apt update
-
 sudo apt install -y \
   ros-jazzy-desktop \
   ros-jazzy-cv-bridge \
@@ -485,13 +314,10 @@ sudo apt install -y \
   git
 ```
 
-Install dependencies declared by ROS 2 packages:
+安装 ROS 2 包声明的依赖：
 
 ```bash
-cd OpenEmbodied_Lab
-
 rosdep update
-
 rosdep install \
   --from-paths src \
   --ignore-src \
@@ -500,200 +326,31 @@ rosdep install \
   -y
 ```
 
-Verify the main Python dependencies:
+## ESP32 Arduino 配置
 
-```bash
-python3 -c "import cv2; print('OpenCV:', cv2.__version__)"
-
-python3 -c "import websocket; print('WebSocket:', websocket.__version__)"
-
-python3 -c "import serial; print('PySerial:', serial.__version__)"
-```
-
----
-
-## USB-to-Serial Driver
-
-The ESP32-CAM-MB download board normally uses a USB-to-UART chip such as CH340 or CP210x.
-
-### Ubuntu
-
-The CH340 and CP210x drivers are normally included in the Linux kernel.
-
-Connect the download board and check the USB device:
-
-```bash
-lsusb
-```
-
-Check the serial device:
-
-```bash
-ls /dev/ttyUSB*
-```
-
-Check the kernel message:
-
-```bash
-sudo dmesg | tail -n 30
-```
-
-Check whether the driver is loaded:
-
-```bash
-lsmod | grep -E "ch341|cp210x"
-```
-
-The serial port normally appears as:
+在 Arduino IDE 中安装 `esp32 by Espressif Systems`，推荐配置：
 
 ```text
-/dev/ttyUSB0
+Board:            AI Thinker ESP32-CAM
+Upload Speed:     115200
+CPU Frequency:    240 MHz
+Flash Frequency:  80 MHz
+Flash Mode:       QIO
+Partition Scheme: Huge APP (3MB No OTA / 1MB SPIFFS)
+Serial Monitor:   115200 baud
 ```
 
-Add the current user to the serial-port group:
+ESP32-CAM 仅支持 2.4 GHz Wi-Fi。
 
-```bash
-sudo usermod -aG dialout "$USER"
-```
+## ROS 2 参数配置
 
-Log out and log back in after running this command.
-
-Check permissions:
-
-```bash
-groups
-```
-
-The output should contain:
-
-```text
-dialout
-```
-
-### Windows
-
-The ESP32-CAM-MB normally appears as a COM port:
-
-```text
-COM3
-COM9
-...
-```
-
-If no COM port appears, install the driver corresponding to the USB-to-UART chip on the download board:
-
-```text
-CH340 / CH341
-or
-CP210x
-```
-
----
-
-## ESP32 Arduino Configuration
-
-In Arduino IDE, install:
-
-```text
-esp32 by Espressif Systems
-```
-
-Recommended board settings:
-
-```text
-Board:
-AI Thinker ESP32-CAM
-
-Upload Speed:
-115200
-
-CPU Frequency:
-240 MHz
-
-Flash Frequency:
-80 MHz
-
-Flash Mode:
-QIO
-
-Partition Scheme:
-Huge APP (3MB No OTA / 1MB SPIFFS)
-```
-
-The serial monitor baud rate must match:
-
-```cpp
-Serial.begin(115200);
-```
-
-Therefore, select:
-
-```text
-115200 baud
-```
-
-The ESP32-CAM requires a 2.4 GHz Wi-Fi network.
-
-### ESP32 protocol host test
-
-The transport-independent V1 codec, COBS, and CRC16 code can be checked on
-Linux without Arduino hardware:
-
-```bash
-g++ \
-  -std=c++17 \
-  -Wall \
-  -Wextra \
-  -Werror \
-  -I ESP_control/esp32cam_gimbal \
-  ESP_control/tests/protocol_v1_host_test.cpp \
-  ESP_control/esp32cam_gimbal/protocol_v1.cpp \
-  ESP_control/esp32cam_gimbal/uart_framing.cpp \
-  -o /tmp/protocol_v1_host_test
-
-/tmp/protocol_v1_host_test
-```
-
-The test covers the shared Linux/ESP32 fixed byte vector, PONG encoding,
-CRC16 reference vector, COBS round trips, corrupted frames, and the maximum
-V1 payload size.
-
-### STM32 protocol host test
-
-The STM32 protocol and motion layers are ordinary C and can be tested without
-Keil or hardware:
-
-```bash
-gcc \
-  -std=c11 \
-  -Wall \
-  -Wextra \
-  -Werror \
-  -pedantic \
-  -I stm32_control/ros2/Core/Inc \
-  stm32_control/ros2/Core/Src/robot_protocol.c \
-  stm32_control/ros2/Core/Src/robot_motion.c \
-  stm32_control/tests/robot_protocol_host_test.c \
-  -o /tmp/robot_protocol_host_test
-
-/tmp/robot_protocol_host_test
-```
-
-This checks the CRC reference vector, COBS framing, MOVE integration and
-timeout, duplicate sequence rejection, CENTER, corrupted-frame rejection, and
-STM32-to-Linux telemetry framing.
-
----
-
-## ROS 2 Configuration
-
-Edit:
+编辑：
 
 ```text
 src/vision_demo/config/esp32_wifi.yaml
 ```
 
-Set the actual ESP32-CAM address:
+将示例地址替换为 ESP32-CAM 串口监视器输出的实际 IP：
 
 ```yaml
 esp32_camera_node:
@@ -712,67 +369,33 @@ gimbal_pd_websocket_node:
   ros__parameters:
     target_topic: "/target_position"
     websocket_url: "ws://192.168.1.100/ws"
-
     control_hz: 10.0
-
     kp_x: 0.015
     kd_x: 0.006
-
     kp_y: 0.015
     kd_y: 0.006
-
     dead_zone_x: 30.0
     dead_zone_y: 30.0
-
     max_step: 3
-
     target_timeout_sec: 0.5
     command_refresh_sec: 0.5
     reconnect_delay_sec: 2.0
-
     motion_valid_ms: 300
     control_epoch: 1
 ```
 
-Replace:
+Linux 主机和 ESP32-CAM 必须连接到同一局域网。
 
-```text
-192.168.1.100
-```
-
-with the IP address printed by the ESP32-CAM serial monitor.
-
-The Linux computer and ESP32-CAM must be connected to the same local network.
-
----
-
-## Build
-
-Enter the ROS 2 workspace:
+## 构建
 
 ```bash
 cd OpenEmbodied_Lab
-```
-
-Load ROS 2 Jazzy:
-
-```bash
 source /opt/ros/jazzy/setup.bash
-```
-
-Build the complete workspace:
-
-```bash
 colcon build --symlink-install
-```
-
-Load the workspace environment:
-
-```bash
 source install/setup.bash
 ```
 
-To build the vision and YOLOv5 packages:
+只构建视觉与 YOLOv5 包：
 
 ```bash
 colcon build \
@@ -780,228 +403,93 @@ colcon build \
   --packages-select vision_demo yolov5_detector
 ```
 
-When package files, entry points, or launch files have changed, clean the package before rebuilding:
-
-```bash
-rm -rf \
-  build/vision_demo \
-  install/vision_demo
-
-colcon build \
-  --symlink-install \
-  --packages-select vision_demo
-
-source install/setup.bash
-```
-
-Check the installed executables:
+查看已安装节点：
 
 ```bash
 ros2 pkg executables vision_demo
 ```
 
-Expected executables include:
+## 运行
 
-```text
-vision_demo esp32_camera
-vision_demo color_tracker
-vision_demo image_viewer
-vision_demo gimbal_pd_serial
-vision_demo gimbal_pd_websocket
-```
+### 1. 检查 ESP32-CAM 视频流
 
----
-
-## Test the ESP32-CAM Connection
-
-Before starting ROS 2, test the ESP32-CAM stream in a browser:
+浏览器访问：
 
 ```text
 http://<ESP32_IP>:81/stream
 ```
 
-The browser should display a continuous video stream.
+启动 ROS 2 节点前建议关闭浏览器视频流，避免不必要的并发连接。
 
-Close the browser stream before starting the ROS 2 camera node to avoid unnecessary simultaneous clients.
-
-Check basic network connectivity:
-
-```bash
-ping <ESP32_IP>
-```
-
-Example:
-
-```bash
-ping 192.168.1.100
-```
-
----
-
-## Run the Camera Node
-
-Load the environment:
+### 2. 启动摄像头节点
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
-```
 
-Start the ESP32-CAM receiver:
-
-```bash
 ros2 run vision_demo esp32_camera \
   --ros-args \
   -p stream_url:="http://192.168.1.100:81/stream"
 ```
 
-Check the image topic:
-
-```bash
-ros2 topic list
-```
-
-The topic should include:
-
-```text
-/image_raw
-```
-
-Check the received frame rate:
+检查图像：
 
 ```bash
 ros2 topic hz /image_raw
-```
-
-Check image information:
-
-```bash
 ros2 topic info /image_raw
-```
-
----
-
-## Display the ROS 2 Image
-
-In another terminal:
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
 ros2 run vision_demo image_viewer
 ```
 
-The image viewer should display the ESP32-CAM video received through ROS 2.
-
----
-
-## Run Target Detection
-
-Start the PyTorch YOLOv5n detector. It subscribes to `/image_raw` and publishes
-the same `/target_position` interface used by the existing gimbal controller:
+### 3. 启动 YOLOv5n 目标检测
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
 ros2 run yolov5_detector yolov5_detector
 ```
 
-The default target class is `person`. It can be changed to any COCO class:
+默认目标类别为 COCO `person`，可切换为其他类别：
 
 ```bash
 ros2 run yolov5_detector yolov5_detector \
   --ros-args -p target_class:=bottle
 ```
 
-Annotated detection images are published on `/yolov5/annotated`. The original
-OpenCV color tracker remains available as `ros2 run vision_demo color_tracker`.
-
-Check the target-position output:
+检测结果发布到 `/yolov5/annotated`，目标中心偏差发布到 `/target_position`。OpenCV 颜色跟踪仍可独立运行：
 
 ```bash
-ros2 topic echo /target_position
+ros2 run vision_demo color_tracker
 ```
 
-The target message contains:
-
-```text
-x: horizontal image error
-y: vertical image error
-z: detected target area
-```
-
----
-
-## Run the WebSocket Controller
-
-The ESP32 firmware must provide:
-
-```text
-ws://<ESP32_IP>/ws
-```
-
-Start the controller:
+### 4. 启动 WebSocket 云台控制
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
 ros2 run vision_demo gimbal_pd_websocket \
   --ros-args \
   -p websocket_url:="ws://192.168.1.100/ws"
 ```
 
-The node sends binary messages with the V1 header:
+消息链路：
 
 ```text
-Linux -> STM32
-service = MOTION (0x10)
-opcode  = MOVE (0x01) or STOP (0x02)
-seq     = wrapping uint16
+ROS 2 PD 控制器
+    ↓ Binary WebSocket：V1 MOTION/MOVE
+ESP32-CAM 消息路由
+    ↓ UART：COBS(V1 + CRC16) + 0x00
+STM32 运动控制与 PWM 输出
 ```
 
-The `websocket-client` call uses a binary WebSocket frame; it does not send
-the former `#MOVE` strings. The ESP32 decodes the 10-byte application header
-and routes STM32 messages through its COBS/CRC16 UART transport. STM32 decodes
-the same V1 message, applies the motion safety rules, and routes responses back
-through ESP32. The image receiver remains independent.
-
----
-
-## Run the Keyboard Motion Test
-
-The keyboard node never opens an STM32 serial port. It discovers the ESP32,
-connects to its WebSocket, sends a Linux-to-STM32 V1 message, and lets the
-ESP32 add UART COBS/CRC framing and route it:
-
-```text
-Linux keyboard node
-        ↓ WebSocket V1
-ESP32 router
-        ↓ UART COBS(V1 + CRC16) + 0x00
-STM32 motion controller
-```
-
-Run it in an interactive terminal:
+### 5. 键盘运动测试
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
 ros2 run vision_demo keyboard_motion
 ```
 
-Controls:
-
 ```text
-↑ ↓ ← →   move the pitch/yaw servos
-b         toggle automatic random up/down/left/right movement
-q         STOP, CENTER, close WebSocket, and quit
+↑ ↓ ← →   控制 pitch/yaw 舵机
+b         开启或关闭随机运动
+q         STOP、CENTER、关闭 WebSocket 并退出
 ```
 
-The default node discovers the first ESP32 broadcast. To select one robot:
+如需指定机器人：
 
 ```bash
 ros2 run vision_demo keyboard_motion \
@@ -1009,32 +497,15 @@ ros2 run vision_demo keyboard_motion \
   -p device_id:="ESP32CAM_A1B2C3"
 ```
 
-To bypass discovery during diagnostics only:
+方向命令以 10 Hz 刷新，有效期为 300 ms。如果 Linux、WebSocket 或 ESP32 路由停止工作，STM32 会在有效期结束后停止更新目标角度。
+
+### 6. 启动完整系统
 
 ```bash
-ros2 run vision_demo keyboard_motion \
-  --ros-args \
-  -p websocket_url:="ws://192.168.103.42:80/ws"
-```
-
-Arrow commands are refreshed at 10 Hz with a 300 ms validity window. If Linux,
-WebSocket, ESP32 routing, or command generation stalls, STM32 stops changing
-the target angles when the validity window expires.
-
----
-
-## Run the Complete ESP32 Wi-Fi System
-
-After editing `esp32_wifi.yaml`, start all nodes with:
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
 ros2 launch yolov5_detector esp32_yolov5.launch.py
 ```
 
-The launch file starts:
+启动节点：
 
 ```text
 esp32_camera_node
@@ -1044,24 +515,7 @@ sensor_bridge_node
 gimbal_pd_websocket_node
 ```
 
-Check the ROS 2 graph:
-
-```bash
-ros2 node list
-ros2 topic list
-```
-
-Expected nodes:
-
-```text
-/esp32_camera_node
-/yolov5_detector_node
-/robot_link_node
-/sensor_bridge_node
-/gimbal_pd_websocket_node
-```
-
-Expected topics include:
+主要话题：
 
 ```text
 /image_raw
@@ -1069,195 +523,122 @@ Expected topics include:
 /yolov5/annotated
 ```
 
----
+## 协议测试
 
-## Legacy USB Camera Version
+### ESP32 协议主机测试
 
-The previous implementation used:
+```bash
+g++ \
+  -std=c++17 \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -I ESP_control/esp32cam_gimbal \
+  ESP_control/tests/protocol_v1_host_test.cpp \
+  ESP_control/esp32cam_gimbal/protocol_v1.cpp \
+  ESP_control/esp32cam_gimbal/uart_framing.cpp \
+  -o /tmp/protocol_v1_host_test
 
-```text
-USB camera
-→ ROS 2
-→ OpenCV
-→ PD controller
-→ Linux serial port
-→ STM32
+/tmp/protocol_v1_host_test
 ```
 
-The optional USB camera driver can be installed with:
+覆盖 V1 固定字节向量、PONG 编码、CRC16 参考向量、COBS 往返、损坏帧和最大 Payload 测试。
+
+### STM32 协议主机测试
+
+```bash
+gcc \
+  -std=c11 \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -pedantic \
+  -I stm32_control/ros2/Core/Inc \
+  stm32_control/ros2/Core/Src/robot_protocol.c \
+  stm32_control/ros2/Core/Src/robot_motion.c \
+  stm32_control/tests/robot_protocol_host_test.c \
+  -o /tmp/robot_protocol_host_test
+
+/tmp/robot_protocol_host_test
+```
+
+覆盖 CRC、COBS、MOVE 积分与超时、重复序列拒绝、CENTER、损坏帧拒绝及 STM32 到 Linux 的遥测帧测试。
+
+## USB 摄像头旧版本
+
+旧版链路为：
+
+```text
+USB 摄像头 → ROS 2 → OpenCV → PD 控制器 → Linux 串口 → STM32
+```
+
+旧版驱动和串口节点仍保留：
 
 ```bash
 sudo apt install -y ros-jazzy-usb-cam
-```
-
-Start the USB camera:
-
-```bash
 ros2 run usb_cam usb_cam_node_exe
-```
-
-Start the original serial controller:
-
-```bash
 ros2 run vision_demo gimbal_pd_serial
 ```
 
-The ESP32 Wi-Fi branch does not require `usb_cam` for normal operation.
+ESP32 Wi-Fi 版本正常运行时不需要 `usb_cam`。
 
----
+## 常见问题
 
-## Troubleshooting
+### ESP32 视频流无法打开
 
-### ESP32 stream cannot be opened
-
-Check that the stream works in a browser:
-
-```text
-http://<ESP32_IP>:81/stream
-```
-
-Check the network:
+检查：
 
 ```bash
 ping <ESP32_IP>
 ```
 
-Make sure:
+- ESP32-CAM 与 Linux 是否在同一局域网
+- ESP32-CAM 是否连接到 2.4 GHz Wi-Fi
+- IP 地址和 `:81/stream` 是否正确
+- 浏览器是否占用了唯一视频连接
 
-```text
-ESP32-CAM and Linux are on the same LAN
-ESP32-CAM is connected to 2.4 GHz Wi-Fi
-The browser is not occupying the only available stream connection
-The ESP32 IP address is correct
-```
-
-### `/image_raw` has no data
-
-Check the camera node:
+### `/image_raw` 没有数据
 
 ```bash
 ros2 node info /esp32_camera_node
-```
-
-Check the topic:
-
-```bash
 ros2 topic hz /image_raw
 ```
 
-Run the node directly and inspect its log:
+### WebSocket 连接失败
 
-```bash
-ros2 run vision_demo esp32_camera \
-  --ros-args \
-  -p stream_url:="http://<ESP32_IP>:81/stream"
-```
-
-### WebSocket connection fails
-
-Verify that the ESP32 firmware has implemented:
+确认 ESP32 固件提供：
 
 ```text
 ws://<ESP32_IP>/ws
 ```
 
-A working HTTP MJPEG stream does not automatically provide a WebSocket server.
+HTTP MJPEG 正常并不代表 WebSocket 服务已经启动。
 
-### ROS 2 executable not found
-
-Rebuild and reload the environment:
+### ROS 2 找不到可执行节点
 
 ```bash
-cd OpenEmbodied_Lab
-
-rm -rf \
-  build/vision_demo \
-  install/vision_demo
-
 source /opt/ros/jazzy/setup.bash
-
-colcon build \
-  --symlink-install \
-  --packages-select vision_demo
-
+colcon build --symlink-install --packages-select vision_demo
 source install/setup.bash
 ```
 
-### Serial permission denied
-
-Add the user to `dialout`:
+### 串口权限不足
 
 ```bash
 sudo usermod -aG dialout "$USER"
 ```
 
-Then log out and log back in.
+执行后注销并重新登录。
 
----
+## 开发计划
 
-## Roadmap
-
-### Completed
-
-- [x] ROS 2 workspace
-- [x] USB camera prototype
-- [x] OpenCV target detection
-- [x] PyTorch YOLOv5n detection node
-- [x] Latest-frame-only YOLOv5 inference pipeline
-- [x] YOLOv5 annotated image topic
-- [x] Target center offset calculation
-- [x] PD tracking controller
-- [x] STM32 serial protocol
-- [x] STM32 PWM servo control
-- [x] ESP32-CAM OV3660 initialization
-- [x] HTTP JPEG capture
-- [x] MJPEG video streaming
-- [x] ROS 2 ESP32-CAM image receiver
-- [x] ROS 2 image topic publication
-- [x] Linux V1 application protocol codec
-- [x] Linux binary WebSocket motion sender
-- [x] V1 protocol fixed-vector unit tests
-- [x] ESP32 V1 binary WebSocket decoder
-- [x] ESP32 V1 message router
-- [x] ESP32-to-STM32 COBS and CRC16 framing
-- [x] STM32-to-Linux validated V1 forwarding
-- [x] NVS multi-network Wi-Fi provisioning
-- [x] SoftAP fallback configuration page
-- [x] ESP32 UDP endpoint discovery broadcast
-- [x] Linux UDP discovery parser and command
-- [x] UDP discovery pauses while WebSocket is connected
-- [x] Linux keyboard/random V1 motion test node
-- [x] STM32 V1 application decoder and transmitter
-- [x] STM32 COBS and CRC16 UART framing
-- [x] STM32 MOVE timeout and stale-sequence protection
-
-### In Progress
-
-- [x] ESP32 V1 WebSocket server
-- [x] ESP32 V1 UART routing
-- [ ] Linux ACK receive, timeout, and retry
-- [ ] Complete Wi-Fi gimbal control loop
-- [ ] RK3568 deployment
-- [ ] ROS 2 launch and parameter optimization
-- [ ] IMU integration
-- [ ] Millimeter-wave radar
-- [ ] Mobile robot platform
-- [ ] ROS 2 Nav2
-- [ ] Embedded AI applications
-
----
-
-## Future Plans
-
-This repository will continue to grow with projects related to:
-
-- Embedded Linux
-- STM32
-- ESP32
-- RK3568
-- ROS 2
-- PCB design
-- Robotics
-- Computer vision
-- Edge AI
-- Embodied AI
+- [x] ROS 2 工作空间、视觉节点和云台 PD 控制
+- [x] ESP32-CAM 图像采集、MJPEG 和 WebSocket 服务
+- [x] V1 三端消息协议、COBS 分帧和 CRC16 校验
+- [x] STM32 消息分发、安全控制与 PWM 舵机驱动
+- [x] Wi-Fi 自动配网、设备发现及键盘运动测试
+- [ ] Linux ACK、超时与自动重传
+- [ ] RK3568 NPU 模型转换、量化和部署
+- [ ] INMP441 音频采集与声音感知
+- [ ] IMU、毫米波雷达和移动底盘集成
+- [ ] ROS 2 Nav2 与完整机器人系统

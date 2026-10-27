@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="920" viewBox="0 0 1600 920" role="img" aria-labelledby="title desc">
+  <title id="title">ROS 2 ESP32-CAM active vision gimbal architecture</title>
+  <desc id="desc">OV3660 camera connects to ESP32-CAM. ESP32-CAM streams MJPEG to RK3568, which runs ROS 2, YOLOv5n, target-center estimation, PD control, and the V1 protocol scheduler. Control returns through ESP32-CAM to STM32 over UART with COBS and CRC16. STM32 applies safety checks and PWM control to a two-axis gimbal.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef2ff"/>
+    </linearGradient>
+    <linearGradient id="rk" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eff6ff"/>
+      <stop offset="1" stop-color="#dbeafe"/>
+    </linearGradient>
+    <linearGradient id="esp" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ecfeff"/>
+      <stop offset="1" stop-color="#cffafe"/>
+    </linearGradient>
+    <linearGradient id="stm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#faf5ff"/>
+      <stop offset="1" stop-color="#ede9fe"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow-vision" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#0891b2"/>
+    </marker>
+    <marker id="arrow-control" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-uart" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrow-status" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#8b5cf6"/>
+    </marker>
+    <marker id="arrow-pwm" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#ea580c"/>
+    </marker>
+    <style>
+      text { font-family: Inter, "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .title { font-size: 34px; font-weight: 760; letter-spacing: -0.4px; }
+      .subtitle { font-size: 16px; fill: #475569; }
+      .chip-title { font-size: 26px; font-weight: 760; }
+      .chip-subtitle { font-size: 15px; fill: #475569; }
+      .item { font-size: 17px; font-weight: 560; }
+      .item-sub { font-size: 14px; fill: #64748b; }
+      .link-title { font-size: 17px; font-weight: 720; }
+      .link-sub { font-size: 14px; fill: #475569; }
+      .badge { font-size: 13px; font-weight: 720; letter-spacing: 0.7px; }
+      .legend { font-size: 14px; fill: #475569; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="920" rx="24" fill="url(#bg)"/>
+
+  <text x="70" y="62" class="title">ROS 2 ESP32-CAM Active Vision Gimbal</text>
+  <text x="70" y="92" class="subtitle">Separated vision, control, transport, and real-time actuation paths</text>
+
+  <!-- OV3660 -->
+  <g filter="url(#shadow)">
+    <rect x="690" y="122" width="220" height="122" rx="18" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/>
+  </g>
+  <circle cx="752" cy="175" r="30" fill="#0f172a" opacity="0.10"/>
+  <circle cx="752" cy="175" r="20" fill="none" stroke="#334155" stroke-width="6"/>
+  <circle cx="752" cy="175" r="7" fill="#334155"/>
+  <path d="M728 212 H776" stroke="#334155" stroke-width="5" stroke-linecap="round"/>
+  <text x="804" y="168" class="chip-title">OV3660</text>
+  <text x="804" y="193" class="chip-subtitle">Camera sensor</text>
+
+  <!-- RK3568 card -->
+  <g filter="url(#shadow)">
+    <rect x="55" y="310" width="485" height="455" rx="24" fill="url(#rk)" stroke="#60a5fa" stroke-width="2.5"/>
+  </g>
+  <rect x="82" y="337" width="122" height="30" rx="15" fill="#2563eb"/>
+  <text x="143" y="357" class="badge" text-anchor="middle" fill="#ffffff">EDGE AI</text>
+  <text x="82" y="405" class="chip-title">RK3568</text>
+  <text x="82" y="432" class="chip-subtitle">Linux · ROS 2 Jazzy · Edge inference</text>
+
+  <rect x="82" y="463" width="430" height="58" rx="13" fill="#ffffff" stroke="#bfdbfe"/>
+  <text x="104" y="489" class="item">esp32_camera_node</text>
+  <text x="104" y="510" class="item-sub">MJPEG decode → /image_raw</text>
+
+  <rect x="82" y="534" width="430" height="58" rx="13" fill="#ffffff" stroke="#bfdbfe"/>
+  <text x="104" y="560" class="item">YOLOv5n / OpenCV perception</text>
+  <text x="104" y="581" class="item-sub">Latest-frame inference → target center</text>
+
+  <rect x="82" y="605" width="430" height="58" rx="13" fill="#ffffff" stroke="#bfdbfe"/>
+  <text x="104" y="631" class="item">Target error + PD controller</text>
+  <text x="104" y="652" class="item-sub">Dead zone · derivative term · rate limit</text>
+
+  <rect x="82" y="676" width="430" height="58" rx="13" fill="#ffffff" stroke="#bfdbfe"/>
+  <text x="104" y="702" class="item">V1 protocol + bounded QoS scheduler</text>
+  <text x="104" y="723" class="item-sub">Latest · Reliable · Sample · Bulk</text>
+
+  <!-- ESP32 card -->
+  <g filter="url(#shadow)">
+    <rect x="650" y="310" width="300" height="455" rx="24" fill="url(#esp)" stroke="#22d3ee" stroke-width="2.5"/>
+  </g>
+  <rect x="677" y="337" width="128" height="30" rx="15" fill="#0891b2"/>
+  <text x="741" y="357" class="badge" text-anchor="middle" fill="#ffffff">GATEWAY</text>
+  <text x="677" y="405" class="chip-title">ESP32-CAM</text>
+  <text x="677" y="432" class="chip-subtitle">Camera · Wi-Fi · protocol bridge</text>
+
+  <rect x="677" y="463" width="246" height="58" rx="13" fill="#ffffff" stroke="#a5f3fc"/>
+  <text x="697" y="489" class="item">JPEG / MJPEG server</text>
+  <text x="697" y="510" class="item-sub">HTTP capture and stream</text>
+
+  <rect x="677" y="534" width="246" height="58" rx="13" fill="#ffffff" stroke="#a5f3fc"/>
+  <text x="697" y="560" class="item">Wi-Fi lifecycle</text>
+  <text x="697" y="581" class="item-sub">NVS · SoftAP · UDP discovery</text>
+
+  <rect x="677" y="605" width="246" height="58" rx="13" fill="#ffffff" stroke="#a5f3fc"/>
+  <text x="697" y="631" class="item">V1 message router</text>
+  <text x="697" y="652" class="item-sub">WebSocket/TCP ↔ UART</text>
+
+  <rect x="677" y="676" width="246" height="58" rx="13" fill="#ffffff" stroke="#a5f3fc"/>
+  <text x="697" y="702" class="item">Transport validation</text>
+  <text x="697" y="723" class="item-sub">Length · flags · src/dst routing</text>
+
+  <!-- STM32 card -->
+  <g filter="url(#shadow)">
+    <rect x="1060" y="310" width="485" height="455" rx="24" fill="url(#stm)" stroke="#a78bfa" stroke-width="2.5"/>
+  </g>
+  <rect x="1087" y="337" width="156" height="30" rx="15" fill="#7c3aed"/>
+  <text x="1165" y="357" class="badge" text-anchor="middle" fill="#ffffff">REAL-TIME</text>
+  <text x="1087" y="405" class="chip-title">STM32F103</text>
+  <text x="1087" y="432" class="chip-subtitle">Deterministic control · static memory</text>
+
+  <rect x="1087" y="463" width="430" height="58" rx="13" fill="#ffffff" stroke="#ddd6fe"/>
+  <text x="1109" y="489" class="item">UART ring buffer + frame decoder</text>
+  <text x="1109" y="510" class="item-sub">COBS delimiter recovery · CRC16 check</text>
+
+  <rect x="1087" y="534" width="430" height="58" rx="13" fill="#ffffff" stroke="#ddd6fe"/>
+  <text x="1109" y="560" class="item">V1 dispatcher + result cache</text>
+  <text x="1109" y="581" class="item-sub">Service/Opcode routing · duplicate suppression</text>
+
+  <rect x="1087" y="605" width="430" height="58" rx="13" fill="#ffffff" stroke="#ddd6fe"/>
+  <text x="1109" y="631" class="item">Motion safety state machine</text>
+  <text x="1109" y="652" class="item-sub">Sequence · valid_ms timeout · ESTOP latch</text>
+
+  <rect x="1087" y="676" width="430" height="58" rx="13" fill="#ffffff" stroke="#ddd6fe"/>
+  <text x="1109" y="702" class="item">Timer PWM servo output</text>
+  <text x="1109" y="723" class="item-sub">Yaw / pitch limits and rate integration</text>
+
+  <!-- Camera sensor link -->
+  <path d="M800 244 V294" fill="none" stroke="#0891b2" stroke-width="6" marker-end="url(#arrow-vision)"/>
+  <rect x="827" y="253" width="137" height="31" rx="15" fill="#ffffff" stroke="#a5f3fc"/>
+  <text x="895" y="274" class="link-sub" text-anchor="middle">DVP / JPEG capture</text>
+
+  <!-- ESP32 <-> RK3568 -->
+  <path d="M650 478 H570" fill="none" stroke="#0891b2" stroke-width="7" marker-end="url(#arrow-vision)"/>
+  <rect x="493" y="449" width="225" height="30" rx="15" fill="#ffffff" stroke="#67e8f9"/>
+  <text x="605" y="470" class="link-title" text-anchor="middle" fill="#0e7490">HTTP MJPEG · Wi-Fi</text>
+
+  <path d="M540 632 H620" fill="none" stroke="#2563eb" stroke-width="7" marker-end="url(#arrow-control)"/>
+  <rect x="488" y="649" width="216" height="47" rx="15" fill="#ffffff" stroke="#93c5fd"/>
+  <text x="596" y="669" class="link-title" text-anchor="middle" fill="#1d4ed8">V1 control</text>
+  <text x="596" y="688" class="link-sub" text-anchor="middle">Binary WebSocket / TCP</text>
+
+  <!-- ESP32 <-> STM32 -->
+  <path d="M950 544 H1030" fill="none" stroke="#7c3aed" stroke-width="7" marker-end="url(#arrow-uart)"/>
+  <rect x="903" y="477" width="205" height="48" rx="15" fill="#ffffff" stroke="#c4b5fd"/>
+  <text x="1005" y="498" class="link-title" text-anchor="middle" fill="#6d28d9">UART framing</text>
+  <text x="1005" y="517" class="link-sub" text-anchor="middle">COBS(V1 + CRC16) + 0x00</text>
+
+  <path d="M1030 589 H950" fill="none" stroke="#8b5cf6" stroke-width="5" marker-end="url(#arrow-status)"/>
+  <rect x="925" y="603" width="158" height="31" rx="15" fill="#ffffff" stroke="#c4b5fd"/>
+  <text x="1004" y="624" class="link-sub" text-anchor="middle">Result / telemetry</text>
+
+  <!-- Gimbal -->
+  <path d="M1302 765 V810" fill="none" stroke="#ea580c" stroke-width="7" marker-end="url(#arrow-pwm)"/>
+  <rect x="1325" y="776" width="117" height="31" rx="15" fill="#ffffff" stroke="#fdba74"/>
+  <text x="1383" y="797" class="link-title" text-anchor="middle" fill="#c2410c">PWM</text>
+  <g filter="url(#shadow)">
+    <rect x="1120" y="824" width="365" height="68" rx="18" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+  </g>
+  <circle cx="1163" cy="858" r="18" fill="none" stroke="#c2410c" stroke-width="5"/>
+  <path d="M1163 840 V826 M1163 876 V889 M1145 858 H1131 M1181 858 H1195" stroke="#c2410c" stroke-width="4" stroke-linecap="round"/>
+  <text x="1212" y="852" class="item">Two-axis servo gimbal</text>
+  <text x="1212" y="875" class="item-sub">Yaw / pitch visual tracking</text>
+
+  <!-- Legend -->
+  <g transform="translate(58,843)">
+    <line x1="0" y1="0" x2="38" y2="0" stroke="#0891b2" stroke-width="6"/>
+    <text x="50" y="5" class="legend">vision data</text>
+    <line x1="155" y1="0" x2="193" y2="0" stroke="#2563eb" stroke-width="6"/>
+    <text x="205" y="5" class="legend">control</text>
+    <line x1="294" y1="0" x2="332" y2="0" stroke="#7c3aed" stroke-width="6"/>
+    <text x="344" y="5" class="legend">framed UART / status</text>
+  </g>
+</svg>
